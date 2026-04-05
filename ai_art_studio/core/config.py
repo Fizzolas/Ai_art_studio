@@ -200,6 +200,8 @@ class GenerationConfig:
     vid_negative_prompt: str = ""
     vid_tiling: bool = False
     vid_format: str = "mp4"
+    vid_caption_clips: bool = True
+    vid_caption_sample_frames: int = 5
 
     # Output
     output_dir: str = str(OUTPUTS_DIR)

@@ -1558,6 +1558,27 @@ class MainWindow(QMainWindow):
         stitch_info.setObjectName("muted")
         stitch_info.setWordWrap(True)
         adv_vid_section.addWidget(stitch_info)
+
+        # Clip context captioning
+        self.vid_caption_clips = LabeledCheck(
+            "Caption clips for context continuity", True)
+        self.vid_caption_clips.toggled.connect(
+            lambda v: self.cfg.update_and_save("generation", "vid_caption_clips", v))
+        adv_vid_section.addWidget(self.vid_caption_clips)
+        self.vid_caption_frames = LabeledSlider(
+            "Frames sampled per clip caption", 3, 10, 5, 1, 0)
+        self.vid_caption_frames.valueChanged.connect(
+            lambda v: self.cfg.update_and_save("generation", "vid_caption_sample_frames", int(v)))
+        adv_vid_section.addWidget(self.vid_caption_frames)
+        caption_note = QLabel(
+            "When enabled, each generated clip is captioned (frames \u2192 sequence \u2192 summary)\n"
+            "and the description is fed into the next clip's prompt as continuation context.\n"
+            "Requires a captioning model (BLIP-2, Florence-2, or WD Tagger) to be installed."
+        )
+        caption_note.setObjectName("muted")
+        caption_note.setWordWrap(True)
+        adv_vid_section.addWidget(caption_note)
+
         self.vid_params_section.addWidget(adv_vid_section)
 
         self.vid_params_section.setVisible(False)
@@ -3691,6 +3712,8 @@ class MainWindow(QMainWindow):
             "seed": int(self.vid_seed.value()),
             "flow_shift": self.vid_flow_shift.value() if hasattr(self, 'vid_flow_shift') else 3.0,
             "output_dir": self.cfg.config.generation.output_dir,
+            "caption_clips": self.vid_caption_clips.isChecked() if hasattr(self, 'vid_caption_clips') else True,
+            "caption_sample_frames": int(self.vid_caption_frames.value()) if hasattr(self, 'vid_caption_frames') else 5,
         }
 
         class LongVideoWorker(QThread):
