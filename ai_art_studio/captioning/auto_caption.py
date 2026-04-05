@@ -289,7 +289,6 @@ class WDTagger:
             _status("pandas not installed — WD Tagger unavailable.")
             self.model = "fallback"; return
         try:
-            import onnxruntime as ort
             from huggingface_hub import hf_hub_download
             import pandas as pd
             _status(f"Loading WD Tagger: {self.model_name}")
@@ -300,29 +299,7 @@ class WDTagger:
             self.general_indices = list(np.where(df["category"] == 0)[0])
             self.character_indices = list(np.where(df["category"] == 4)[0])
 
-            # ── Maximise GPU utilisation for ONNX ──
-            sess_opts = ort.SessionOptions()
-            sess_opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-            # Use all CPU threads for pre/post-processing
-            sess_opts.intra_op_num_threads = os.cpu_count() or 4
-            sess_opts.inter_op_num_threads = os.cpu_count() or 4
-            sess_opts.execution_mode = ort.ExecutionMode.ORT_PARALLEL
-
-            providers = []
-            if self.device == "cuda":
-                # Maximise GPU throughput
-                cuda_opts = {
-                    "device_id": 0,
-                    "arena_extend_strategy": "kSameAsRequested",
-                    "gpu_mem_limit": 2 * 1024 * 1024 * 1024,  # 2 GB cap for tagger
-                    "cudnn_conv_algo_search": "EXHAUSTIVE",
-                    "do_copy_in_default_stream": True,
-                }
-                providers.append(("CUDAExecutionProvider", cuda_opts))
-            providers.append("CPUExecutionProvider")
-
-            self.model = ort.InferenceSession(
-                model_path, sess_options=sess_opts, providers=providers)
+            self.model = self._create_onnx_session(model_path)
             input_shape = self.model.get_inputs()[0].shape
             self.input_size = (input_shape[1]
                                if isinstance(input_shape[1], int)
@@ -332,6 +309,34 @@ class WDTagger:
             _status(f"Failed to load WD Tagger: {e}")
             logger.error(f"WD Tagger load error: {e}", exc_info=True)
             self.model = "fallback"
+
+    def _create_onnx_session(self, model_path: str):
+        providers_to_try = []
+        try:
+            import torch
+            if torch.cuda.is_available():
+                providers_to_try.append(
+                    ("CUDAExecutionProvider", {"device_id": 0, "arena_extend_strategy": "kNextPowerOfTwo"})
+                )
+        except ImportError:
+            pass
+        providers_to_try.append("CPUExecutionProvider")
+
+        last_error = None
+        for provider in providers_to_try:
+            try:
+                import onnxruntime as ort
+                sess_options = ort.SessionOptions()
+                sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+                provider_list = [provider] if isinstance(provider, str) else [provider]
+                session = ort.InferenceSession(model_path, sess_options, providers=provider_list)
+                used = session.get_providers()[0]
+                logger.info(f"WD Tagger ONNX session created with provider: {used}")
+                return session
+            except Exception as e:
+                last_error = e
+                logger.warning(f"ONNX provider {provider} failed: {e}, trying next...")
+        raise RuntimeError(f"Could not create ONNX session with any provider. Last error: {last_error}")
 
     def _preprocess(self, image: Image.Image) -> np.ndarray:
         """Resize + normalise a single image for the tagger."""
@@ -864,6 +869,17 @@ class AutoCaptionPipeline:
             config = ConfigManager().config.captioning
         self.config = config
         self._on_status = on_status
+        self.wd_tagger = None
+        self.natural_captioner = None
+        self.analyzer = ContentAnalyzer()
+        self._loaded = False
+        self._models_loaded = False
+
+    def _ensure_models_loaded(self):
+        """Lazily load captioning models on first use (not at __init__ time)."""
+        if self._models_loaded:
+            return
+        config = self.config
         self.wd_tagger = WDTagger(
             model_name=config.wd_model, threshold=config.wd_threshold)
         if config.method == "florence2":
@@ -871,8 +887,8 @@ class AutoCaptionPipeline:
         else:
             nl_model = config.blip2_model
         self.natural_captioner = NaturalCaptioner(model_name=nl_model)
-        self.analyzer = ContentAnalyzer()
-        self._loaded = False
+        self.load_models()
+        self._models_loaded = True
 
     def _status(self, msg: str):
         logger.info(msg)
@@ -903,7 +919,7 @@ class AutoCaptionPipeline:
 
     def caption_image(self, image_path: str,
                        pil_image: Image.Image = None) -> CaptionResult:
-        self.load_models()
+        self._ensure_models_loaded()
         result = CaptionResult(file_path=image_path)
 
         if pil_image is not None:
@@ -964,7 +980,7 @@ class AutoCaptionPipeline:
         Videos are extracted to frames first, then each frame is
         captioned individually.
         """
-        self.load_models()
+        self._ensure_models_loaded()
         results: List[CaptionResult] = []
 
         if caption_dir:
@@ -1387,9 +1403,12 @@ class AutoCaptionPipeline:
     # ── Cleanup ───────────────────────────────────────────────────────
 
     def unload_models(self):
-        self.wd_tagger.unload()
-        self.natural_captioner.unload()
+        if self.wd_tagger is not None:
+            self.wd_tagger.unload()
+        if self.natural_captioner is not None:
+            self.natural_captioner.unload()
         self._loaded = False
+        self._models_loaded = False
         from core.gpu_utils import flush_gpu_memory
         flush_gpu_memory()
 

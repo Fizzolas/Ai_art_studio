@@ -6,19 +6,30 @@ from pathlib import Path
 
 from PyQt6.QtWidgets import (
     QWizard, QWizardPage, QVBoxLayout, QLabel, QCheckBox,
-    QHBoxLayout, QWidget,
+    QHBoxLayout, QWidget, QPushButton, QComboBox, QFrame, QGroupBox,
 )
 from PyQt6.QtCore import Qt
 
 from gui.widgets import PathSelector
 from core.model_downloader import MANAGED_MODELS
+from core.gpu_utils import detect_hardware_profile
+from core.config import ConfigManager
 
 
 class WelcomePage(QWizardPage):
-    """Page 1 — Welcome."""
+    """Page 1 — Welcome with hardware detection."""
 
-    def __init__(self):
+    OFFLOAD_MODES = ["none", "balanced", "aggressive", "cpu_only"]
+    OFFLOAD_LABELS = {
+        "none": "None (full VRAM)",
+        "balanced": "Balanced",
+        "aggressive": "Aggressive",
+        "cpu_only": "CPU Only",
+    }
+
+    def __init__(self, cfg=None):
         super().__init__()
+        self.cfg = cfg
         self.setTitle("Welcome to AI Art Studio")
         layout = QVBoxLayout(self)
 
@@ -32,7 +43,84 @@ class WelcomePage(QWizardPage):
         desc.setWordWrap(True)
         desc.setStyleSheet("font-size: 13px; padding: 16px 0;")
         layout.addWidget(desc)
+
+        # --- Hardware profile card ---
+        hw_profile = detect_hardware_profile()
+
+        hw_group = QGroupBox("Detected Hardware")
+        hw_layout = QVBoxLayout(hw_group)
+
+        gpu_name = hw_profile.get("gpu_name", "None")
+        vram_mb = hw_profile.get("vram_total_mb", 0)
+        vram_display = f"{vram_mb} MB" if vram_mb > 0 else "N/A"
+        recommended = hw_profile.get("recommended_offload", "cpu_only")
+
+        gpu_label = QLabel(f"<b>GPU:</b> {gpu_name}")
+        vram_label = QLabel(f"<b>VRAM:</b> {vram_display}")
+        rec_label = QLabel(
+            f"<b>Recommended offload mode:</b> "
+            f"{self.OFFLOAD_LABELS.get(recommended, recommended)}"
+        )
+        for lbl in (gpu_label, vram_label, rec_label):
+            lbl.setStyleSheet("font-size: 12px; padding: 2px 0;")
+            hw_layout.addWidget(lbl)
+
+        layout.addWidget(hw_group)
+
+        # --- Action buttons ---
+        btn_row = QHBoxLayout()
+        self._btn_recommended = QPushButton("Use Recommended")
+        self._btn_manual = QPushButton("Choose Manually")
+        btn_row.addWidget(self._btn_recommended)
+        btn_row.addWidget(self._btn_manual)
+        btn_row.addStretch()
+        layout.addLayout(btn_row)
+
+        # --- Manual combo (hidden by default) ---
+        self._manual_widget = QWidget()
+        manual_layout = QHBoxLayout(self._manual_widget)
+        manual_layout.setContentsMargins(0, 4, 0, 0)
+        manual_layout.addWidget(QLabel("Offload mode:"))
+        self._offload_combo = QComboBox()
+        for mode in self.OFFLOAD_MODES:
+            self._offload_combo.addItem(self.OFFLOAD_LABELS[mode], mode)
+        # Pre-select the recommended mode in the combo
+        rec_index = self.OFFLOAD_MODES.index(recommended) if recommended in self.OFFLOAD_MODES else 1
+        self._offload_combo.setCurrentIndex(rec_index)
+        manual_layout.addWidget(self._offload_combo)
+        manual_layout.addStretch()
+        self._manual_widget.setVisible(False)
+        layout.addWidget(self._manual_widget)
+
+        # Store recommended value for the button handler
+        self._recommended_offload = recommended
+
+        # Connect signals
+        self._btn_recommended.clicked.connect(self._apply_recommended)
+        self._btn_manual.clicked.connect(self._show_manual)
+        self._offload_combo.currentIndexChanged.connect(self._on_combo_changed)
+
         layout.addStretch()
+
+    # --- Slots ---
+
+    def _apply_recommended(self):
+        """Set offload mode to the recommended value and save."""
+        if self.cfg is not None:
+            self.cfg.config.hardware.offload_mode = self._recommended_offload
+            self.cfg.save()
+        self._manual_widget.setVisible(False)
+
+    def _show_manual(self):
+        """Reveal the manual offload-mode combo box."""
+        self._manual_widget.setVisible(True)
+
+    def _on_combo_changed(self, index):
+        """Apply the manually-chosen offload mode and save."""
+        mode = self._offload_combo.currentData()
+        if mode and self.cfg is not None:
+            self.cfg.config.hardware.offload_mode = mode
+            self.cfg.save()
 
 
 class PathsPage(QWizardPage):
@@ -105,7 +193,7 @@ class SetupWizard(QWizard):
         self.setWindowTitle("AI Art Studio — Setup")
         self.setMinimumSize(600, 450)
 
-        self._welcome = WelcomePage()
+        self._welcome = WelcomePage(cfg=cfg)
         self._paths = PathsPage()
         self._models = ModelSelectionPage()
 

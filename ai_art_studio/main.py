@@ -150,15 +150,6 @@ def main():
     if not check_dependencies():
         sys.exit(1)
 
-    # onnxruntime CUDA provider check (#20)
-    try:
-        import onnxruntime
-        providers = onnxruntime.get_available_providers()
-        if "CUDAExecutionProvider" not in providers:
-            logger.warning("onnxruntime-gpu: CUDA provider not available. WD Tagger will use CPU.")
-    except ImportError:
-        logger.warning("onnxruntime not installed. WD Tagger captioning will not be available.")
-
     from PyQt6.QtWidgets import QApplication
     from PyQt6.QtGui import QFont
     from PyQt6.QtCore import Qt
@@ -221,6 +212,12 @@ def main():
     # First-run wizard
     from core.config import ConfigManager
     cfg = ConfigManager()
+
+    from core.gpu_utils import apply_low_vram_defaults
+    if apply_low_vram_defaults(cfg.config):
+        cfg.save()
+        logger.info("Low VRAM detected — enabled VAE tiling/slicing automatically")
+
     if not cfg.config_file_exists():
         from gui.setup_wizard import SetupWizard
         wizard = SetupWizard(cfg)

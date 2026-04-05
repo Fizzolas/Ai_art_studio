@@ -1,3 +1,21 @@
+## [0.5.0] — 2026-04-05
+
+### New Features (Batch G)
+- **ControlNet support** (Task 1) — Full ControlNet integration with canny/depth/openpose preprocessors, per-model selection (SD1.5 + SDXL), guidance start/end sliders, live conditioning preview button, and auto-save config wiring
+- **IP-Adapter style reference** (Task 2) — Style-guided generation using h94/IP-Adapter with reference image selector, scale slider, thumbnail preview, and informational tooltip
+- **img2img standalone tab** (Task 3) — Dedicated tab with input image selector + preview, denoising strength slider, full parameter controls, and independent output display
+- **Hardware auto-detection** (Task 4) — First-run wizard now detects GPU, VRAM, CUDA version; recommends offload mode with "Use Recommended" / "Choose Manually" options
+- **Tiled VAE auto-enable** (Task 5) — Automatically enables VAE tiling, slicing, and attention slicing on GPUs with <6GB VRAM at startup
+- **Stepped OOM fallback** (Task 6) — Generation retries at 75%, 50%, and 256×256 minimum resolution on OOM; auto-bumps offload mode and notifies user via toast
+- **Lazy model loading** (Task 7) — Captioning models load on first use instead of at init; video_gen.py imports torch/diffusers lazily; removed eager onnxruntime check from startup
+- **CPU fallback for ONNX** (Task 8) — WD Tagger ONNX session now tries CUDAExecutionProvider first, falls back to CPUExecutionProvider with logged warnings
+- **Generation queue system** (Task 9) — Thread-safe job queue (core/generation_queue.py) with add/cancel/pause/clear; GUI panel with status icons and right-click cancel
+- **Prompt style presets** (Task 10) — Save/load named style strings (configs/prompt_presets.py); 5 built-in presets (Photorealistic, Anime, Oil Painting, Portal 2, Dark Fantasy); Apply/Save/Delete buttons in generation tab
+- **Model browser tab** (Task 11) — Curated registry of 12 recommended HuggingFace models with search filter, tag chips, download status detection, one-click download via ModelDownloadWorker
+- **Real-ESRGAN upscaler** (Task 12) — AI upscaling with Real-ESRGAN (generation/upscaler.py); falls back to LANCZOS if not installed; upscale factor combo shows "AI" vs "Lanczos" options; availability note in GUI
+
+---
+
 ## [0.4.0] — 2026-04-04
 
 ### Auto-Installation (Batch D)

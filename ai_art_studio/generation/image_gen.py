@@ -37,6 +37,9 @@ SAMPLERS = {
 }
 
 
+FALLBACK_STEPS = [0.75, 0.50, None]  # None = absolute minimum 256x256
+
+
 class ImageGenerator:
     """Full-featured image generation with LoRA support and VRAM management."""
 
@@ -49,6 +52,11 @@ class ImageGenerator:
         self.current_lora = None
         self.model_type = None
         self._device = "cuda" if torch.cuda.is_available() else "cpu"
+        self._oom_callback = None
+        self._controlnet_pipe = None
+        self._ip_adapter_repo = "h94/IP-Adapter"
+        self._ip_adapter_subfolder = "models"
+        self._ip_adapter_weight_name = "ip-adapter_sd15.bin"
 
     def load_model(self, model_path: str, model_type: str = "sdxl",
                    on_progress: Callable = None):
@@ -136,29 +144,35 @@ class ImageGenerator:
         """Apply VRAM optimizations based on hardware config."""
         if self.pipe is None:
             return
+        self._apply_optimizations_to(self.pipe)
+
+    def _apply_optimizations_to(self, pipe):
+        """Apply VRAM optimizations to any pipeline."""
+        if pipe is None:
+            return
 
         hw = self.hardware
 
         # Offloading
         if hw.offload_mode == "aggressive" or hw.sequential_offload:
-            self.pipe.enable_sequential_cpu_offload()
+            pipe.enable_sequential_cpu_offload()
             logger.info("Enabled sequential CPU offload")
         elif hw.cpu_offload:
-            self.pipe.enable_model_cpu_offload()
+            pipe.enable_model_cpu_offload()
             logger.info("Enabled model CPU offload")
         else:
-            self.pipe = self.pipe.to(self._device)
+            pipe = pipe.to(self._device)
 
         # Memory optimizations
         if hw.attention_slicing:
-            self.pipe.enable_attention_slicing(1)
+            pipe.enable_attention_slicing(1)
         if hw.vae_slicing:
-            self.pipe.enable_vae_slicing()
+            pipe.enable_vae_slicing()
         if hw.vae_tiling:
-            self.pipe.enable_vae_tiling()
+            pipe.enable_vae_tiling()
         if hw.xformers:
             try:
-                self.pipe.enable_xformers_memory_efficient_attention()
+                pipe.enable_xformers_memory_efficient_attention()
                 logger.info("xformers enabled")
             except Exception:
                 logger.info("xformers not available, using default attention")
@@ -254,7 +268,17 @@ class ImageGenerator:
                  hires_fix: bool = False, hires_scale: float = 1.5,
                  hires_steps: int = 15, hires_denoising: float = 0.55,
                  callback: Callable = None,
-                 init_image=None, strength: float = 0.75) -> List[Image.Image]:
+                 init_image=None, strength: float = 0.75,
+                 controlnet_enabled: bool = False,
+                 controlnet_model_id: str = "",
+                 controlnet_preprocessor: str = "canny",
+                 controlnet_input_image: str = "",
+                 controlnet_strength: float = 1.0,
+                 controlnet_guidance_start: float = 0.0,
+                 controlnet_guidance_end: float = 1.0,
+                 ip_adapter_enabled: bool = False,
+                 ip_adapter_image: str = "",
+                 ip_adapter_scale: float = 0.6) -> List[Image.Image]:
         """Generate images with full parameter control."""
         if self.pipe is None:
             raise RuntimeError("No model loaded")
@@ -273,6 +297,17 @@ class ImageGenerator:
         height = (height // 8) * 8
 
         logger.info(f"Generating: {width}x{height}, steps={steps}, cfg={cfg_scale}, seed={seed}")
+
+        # Determine which pipeline to use
+        active_pipe = self.pipe
+
+        # ControlNet setup
+        if controlnet_enabled and controlnet_input_image and controlnet_model_id:
+            if self._controlnet_pipe is None or getattr(self, '_cn_model_id', '') != controlnet_model_id:
+                self._load_controlnet_pipeline(controlnet_model_id)
+                self._cn_model_id = controlnet_model_id
+            if self._controlnet_pipe is not None:
+                active_pipe = self._controlnet_pipe
 
         try:
             # Build generation kwargs
@@ -313,8 +348,23 @@ class ImageGenerator:
                 gen_kwargs.pop("width", None)
                 gen_kwargs.pop("height", None)
 
-            # Generate
-            output = self.pipe(**gen_kwargs)
+            # ControlNet conditioning
+            if controlnet_enabled and controlnet_input_image and self._controlnet_pipe is not None:
+                ctrl_img = self._preprocess_controlnet_image(
+                    controlnet_input_image, controlnet_preprocessor, width, height)
+                gen_kwargs["image"] = ctrl_img
+                gen_kwargs["controlnet_conditioning_scale"] = controlnet_strength
+                gen_kwargs["control_guidance_start"] = controlnet_guidance_start
+                gen_kwargs["control_guidance_end"] = controlnet_guidance_end
+
+            # IP-Adapter style reference
+            if ip_adapter_enabled and ip_adapter_image:
+                ref_img = self._apply_ip_adapter(active_pipe, ip_adapter_image, ip_adapter_scale)
+                if ref_img is not None:
+                    gen_kwargs["ip_adapter_image"] = ref_img
+
+            # Generate with stepped OOM fallback
+            output = self._generate_with_fallback(gen_kwargs, width, height, pipeline=active_pipe)
             images = output.images
 
             # Hi-res fix (upscale + img2img)
@@ -327,51 +377,10 @@ class ImageGenerator:
 
             return images
 
-        except torch.cuda.OutOfMemoryError as oom_err:
-            import traceback as _tb
-            self._write_error_report(oom_err, gen_kwargs, _tb.format_exc())
-            logger.error("VRAM OOM during generation — attempting recovery...")
-            gc.collect()
-            torch.cuda.empty_cache()
-
-            # Auto-retry at 75% resolution if there's room to shrink
-            reduced_w = ((int(width * 0.75)) // 8) * 8
-            reduced_h = ((int(height * 0.75)) // 8) * 8
-            if reduced_w >= 256 and reduced_h >= 256 and (reduced_w < width or reduced_h < height):
-                logger.info(
-                    f"Retrying at reduced resolution: {reduced_w}x{reduced_h} "
-                    f"(was {width}x{height})"
-                )
-                try:
-                    # Rebuild gen_kwargs fresh to avoid stale references
-                    retry_kwargs = {
-                        "prompt": prompt,
-                        "negative_prompt": negative_prompt if negative_prompt else None,
-                        "width": reduced_w,
-                        "height": reduced_h,
-                        "num_inference_steps": steps,
-                        "guidance_scale": cfg_scale,
-                        "generator": generator,
-                        "num_images_per_prompt": batch_size,
-                    }
-                    if self.model_type == "flux":
-                        retry_kwargs.pop("negative_prompt", None)
-                        retry_kwargs.pop("guidance_scale", None)
-                    if self.model_type in ("sd15", "sdxl") and clip_skip > 1:
-                        retry_kwargs["clip_skip"] = clip_skip
-                    output = self.pipe(**retry_kwargs)
-                    return output.images
-                except torch.cuda.OutOfMemoryError:
-                    gc.collect()
-                    torch.cuda.empty_cache()
-
-            raise RuntimeError(
-                f"Out of VRAM at {width}x{height} (and {reduced_w}x{reduced_h}). Try:\n"
-                f"- Reducing resolution further\n"
-                f"- Enabling more aggressive offloading\n"
-                f"- Reducing batch size\n"
-                f"- Closing other GPU applications"
-            )
+        except RuntimeError as e:
+            if "VRAM" in str(e) or "OutOfMemory" in str(e):
+                raise
+            raise
 
     def _apply_hires_fix(self, images, prompt, negative_prompt,
                          scale, steps, denoising, generator):
@@ -467,9 +476,133 @@ class ImageGenerator:
         fname = error_dir / f"gen_error_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
         fname.write_text(json.dumps(report, indent=2), encoding="utf-8")
 
+    # ── ControlNet ──────────────────────────────────────────────────────
+
+    def _load_controlnet_pipeline(self, controlnet_model_id: str):
+        """Load a ControlNet-aware pipeline variant."""
+        try:
+            from diffusers import ControlNetModel
+            cn_model = ControlNetModel.from_pretrained(
+                controlnet_model_id, torch_dtype=torch.float16)
+            if self.model_type == "sdxl":
+                from diffusers import StableDiffusionXLControlNetPipeline
+                self._controlnet_pipe = StableDiffusionXLControlNetPipeline(
+                    **self.pipe.components, controlnet=cn_model)
+            else:
+                from diffusers import StableDiffusionControlNetPipeline
+                self._controlnet_pipe = StableDiffusionControlNetPipeline(
+                    **self.pipe.components, controlnet=cn_model)
+            self._apply_optimizations_to(self._controlnet_pipe)
+            logger.info(f"ControlNet pipeline loaded: {controlnet_model_id}")
+        except Exception as e:
+            logger.warning(f"ControlNet load failed: {e}")
+            self._controlnet_pipe = None
+
+    def _preprocess_controlnet_image(self, image_path: str, preprocessor: str,
+                                      width: int, height: int):
+        """Preprocess a control image based on the selected preprocessor."""
+        img = Image.open(image_path).convert("RGB").resize((width, height), Image.LANCZOS)
+        if preprocessor == "canny":
+            try:
+                import cv2
+                import numpy as np
+                arr = np.array(img)
+                edges = cv2.Canny(arr, 100, 200)
+                return Image.fromarray(edges).convert("RGB")
+            except ImportError:
+                logger.warning("OpenCV not installed for canny preprocessing")
+                return img
+        elif preprocessor == "depth":
+            try:
+                from transformers import pipeline as hf_pipeline
+                depth_pipe = hf_pipeline("depth-estimation")
+                result = depth_pipe(img)
+                return result["depth"].convert("RGB").resize((width, height))
+            except Exception as e:
+                logger.warning(f"Depth preprocessing failed: {e}")
+                return img
+        elif preprocessor == "openpose":
+            try:
+                from controlnet_aux import OpenposeDetector
+                detector = OpenposeDetector.from_pretrained("lllyasviel/ControlNet")
+                return detector(img)
+            except ImportError:
+                logger.warning("Install controlnet-aux for OpenPose support")
+                return img
+            except Exception as e:
+                logger.warning(f"OpenPose failed: {e}")
+                return img
+        return img  # "none" — pass as-is
+
+    # ── IP-Adapter ────────────────────────────────────────────────────
+
+    def _apply_ip_adapter(self, pipeline, image_path: str, scale: float):
+        """Load IP-Adapter and return the reference image for gen_kwargs."""
+        try:
+            pipeline.load_ip_adapter(
+                self._ip_adapter_repo,
+                subfolder=self._ip_adapter_subfolder,
+                weight_name=self._ip_adapter_weight_name,
+            )
+            pipeline.set_ip_adapter_scale(scale)
+            ref_img = Image.open(image_path).convert("RGB")
+            return ref_img
+        except Exception as e:
+            logger.warning(f"IP-Adapter load failed: {e}")
+            return None
+
+    # ── OOM Fallback ──────────────────────────────────────────────────
+
+    def _generate_with_fallback(self, gen_kwargs: dict, original_w: int,
+                                original_h: int, pipeline=None):
+        """Try generation, stepping down resolution on OOM before giving up."""
+        pipe = pipeline or self.pipe
+        for step in FALLBACK_STEPS:
+            try:
+                return pipe(**gen_kwargs)
+            except torch.cuda.OutOfMemoryError:
+                torch.cuda.empty_cache()
+                if step is None:
+                    gen_kwargs["width"] = 256
+                    gen_kwargs["height"] = 256
+                    logger.warning("OOM: falling back to 256x256 minimum resolution")
+                else:
+                    new_w = max(256, (int(original_w * step) // 8) * 8)
+                    new_h = max(256, (int(original_h * step) // 8) * 8)
+                    gen_kwargs["width"] = new_w
+                    gen_kwargs["height"] = new_h
+                    logger.warning(f"OOM: retrying at {new_w}x{new_h} ({int(step*100)}%)")
+                    self._bump_offload_mode()
+                try:
+                    return pipe(**gen_kwargs)
+                except torch.cuda.OutOfMemoryError:
+                    torch.cuda.empty_cache()
+                    continue
+        raise RuntimeError("Generation failed: insufficient VRAM even at minimum resolution")
+
+    def _bump_offload_mode(self):
+        """Escalate offload mode one step and emit a notification."""
+        try:
+            from core.config import ConfigManager
+            cfg = ConfigManager()
+            order = ["none", "balanced", "aggressive", "cpu_only"]
+            current = cfg.config.hardware.offload_mode
+            idx = order.index(current) if current in order else 0
+            if idx < len(order) - 1:
+                new_mode = order[idx + 1]
+                cfg.update_and_save("hardware", "offload_mode", new_mode)
+                logger.warning(f"OOM: auto-bumped offload mode to '{new_mode}'")
+                if self._oom_callback:
+                    self._oom_callback(new_mode)
+        except Exception as e:
+            logger.warning(f"Failed to bump offload mode: {e}")
+
     def unload(self):
         """Free all GPU memory using the hardened cleanup sequence."""
         from core.gpu_utils import deep_cleanup_pipeline
+        if self._controlnet_pipe is not None:
+            deep_cleanup_pipeline(self._controlnet_pipe, label="ControlNetPipe")
+            self._controlnet_pipe = None
         if self.pipe is not None:
             deep_cleanup_pipeline(self.pipe, label=f"ImageGen({self.current_model})")
             self.pipe = None
