@@ -1,0 +1,47 @@
+# ── Core ML ──
+torch>=2.1.0
+torchvision>=0.16.0
+torchaudio>=2.1.0
+
+# ── Diffusion Models ──
+diffusers>=0.31.0
+transformers>=4.40.0
+accelerate>=0.30.0
+safetensors>=0.4.0
+peft>=0.10.0
+
+# ── Image Processing ──
+Pillow>=10.0
+opencv-python>=4.8.0
+imageio>=2.30.0
+imageio-ffmpeg>=0.4.9
+pillow-heif>=0.15.0
+
+# ── VRAM & Performance ──
+xformers>=0.0.25
+bitsandbytes>=0.43.0
+
+# ── Auto-Captioning ──
+onnxruntime-gpu>=1.17.0
+pandas>=2.0
+
+# ── GUI ──
+PyQt6>=6.6.0
+
+# ── Training (kohya-ss) ──
+# Install separately: pip install kohya-ss-sd-scripts
+# Or clone: git clone https://github.com/kohya-ss/sd-scripts
+
+# ── Utilities ──
+huggingface-hub>=0.23.0
+numpy>=1.24.0
+tqdm>=4.65.0
+psutil>=5.9.0
+GPUtil>=1.4.0
+
+# ── Video support ──
+# ffmpeg must be installed system-wide
+# pip install imageio[ffmpeg]
+
+# ── Optional: HEIC/AVIF support ──
+# pip install pillow-heif pillow-avif-plugin

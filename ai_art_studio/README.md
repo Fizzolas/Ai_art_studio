@@ -2,6 +2,14 @@
 
 Local AI image and video training + generation, optimized for your RTX 4070 Laptop GPU (8GB VRAM).
 
+## Prerequisites
+
+- **Python** 3.10–3.12 (3.13 has limited onnxruntime-gpu support)
+- **NVIDIA GPU** with CUDA 11.8+ (8 GB VRAM minimum, 12 GB+ recommended)
+  - Apple Silicon (MPS) is partially supported for generation; training requires CUDA
+- **Git** (for cloning sd-scripts if using the kohya-ss training backend)
+- **~20 GB disk space** for base models, plus your dataset and outputs
+
 ## Quick Start
 
 ```bash
@@ -13,6 +21,20 @@ run.bat
 # or manually:
 venv\Scripts\python.exe main.py
 ```
+
+## First Run
+
+On first launch, the application will:
+
+1. Create the config directory at `~/.ai_art_studio/`
+2. Open with default settings tuned for an 8 GB VRAM GPU
+3. Prompt you to download base models when needed (automatic via Hugging Face Hub)
+
+**Typical workflow:**
+1. **Dataset tab** — Import your training images/videos
+2. **Auto-caption** — Run captioning (WD Tagger + BLIP-2)
+3. **Training tab** — Configure and start LoRA training
+4. **Generation tab** — Load your LoRA and generate images/videos
 
 ## Architecture
 
@@ -89,6 +111,29 @@ This is what makes your diverse dataset work together:
 - FP8 base model support
 - xformers toggle
 - All settings auto-save on change
+
+## Supported Models
+
+| Type | Model | Training | Generation | Notes |
+|------|-------|----------|------------|-------|
+| Image | Stable Diffusion 1.5 | LoRA | Yes | ~6 GB VRAM |
+| Image | SDXL | LoRA | Yes | ~8–10 GB VRAM |
+| Image | FLUX | LoRA | Yes | FP8 + split_mode for 8 GB |
+| Video | WAN 2.1 | — | Yes | Aggressive offload recommended |
+| Video | AnimateDiff | — | Yes | SD 1.5–based motion |
+
+**Captioning models** (auto-downloaded on first use):
+- WD Tagger v3 (ONNX) — booru-style tag prediction
+- BLIP-2 / Florence-2 — natural-language captioning
+
+## Known Limitations
+
+- **VRAM**: 8 GB is the practical minimum. Some model/resolution combinations may OOM; the app retries at reduced resolution automatically.
+- **Training**: Only LoRA training is supported through the built-in trainer. Full fine-tuning requires external tools.
+- **Apple Silicon**: MPS is supported for image generation only. Training requires an NVIDIA GPU with CUDA.
+- **Python 3.13**: `onnxruntime-gpu` does not yet ship CUDA wheels for 3.13; WD Tagger will fall back to CPU.
+- **Video generation**: High frame counts or resolutions require aggressive CPU offloading and are slow on 8 GB cards.
+- **Windows path length**: Long dataset paths may hit the 260-character limit; the app shortens internal hashes to help, but keep dataset folders shallow.
 
 ## Hardware Optimization Notes (RTX 4070 Laptop 8GB)
 
