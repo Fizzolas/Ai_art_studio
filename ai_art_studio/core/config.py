@@ -180,6 +180,27 @@ class GenerationConfig:
     ip_adapter_scale: float = 0.6
     ip_adapter_image: str = ""
 
+    # Advanced image generation
+    img_eta: float = 0.0
+    img_denoising_start: float = 0.0
+    img_denoising_end: float = 1.0
+    img_tiling: bool = False
+    img_karras_sigmas: bool = True
+    img_rescale_cfg: float = 0.0
+    img_aesthetic_score: float = 6.0
+    img_negative_aesthetic_score: float = 2.5
+
+    # Advanced video generation
+    vid_motion_bucket_id: int = 127
+    vid_noise_aug_strength: float = 0.02
+    vid_decode_chunk_size: int = 8
+    vid_overlap_frames: int = 4
+    vid_clip_count: int = 1
+    vid_sample_method: str = "euler"
+    vid_negative_prompt: str = ""
+    vid_tiling: bool = False
+    vid_format: str = "mp4"
+
     # Output
     output_dir: str = str(OUTPUTS_DIR)
     auto_save: bool = True
@@ -214,11 +235,28 @@ class CaptioningConfig:
 
 
 @dataclass
+class AudioConfig:
+    """Configuration for audio generation (scaffold for future implementation)."""
+    enabled: bool = False
+    model: str = ""
+    prompt: str = ""
+    duration_seconds: float = 10.0
+    sample_rate: int = 44100
+    guidance_scale: float = 3.5
+    seed: int = -1
+    output_format: str = "wav"
+    output_dir: str = ""
+    sync_to_video: bool = False
+    video_path: str = ""
+
+
+@dataclass
 class AppConfig:
     hardware: HardwareProfile = field(default_factory=HardwareProfile)
     training: TrainingConfig = field(default_factory=TrainingConfig)
     generation: GenerationConfig = field(default_factory=GenerationConfig)
     captioning: CaptioningConfig = field(default_factory=CaptioningConfig)
+    audio: AudioConfig = field(default_factory=AudioConfig)
     theme: str = "dark"
     last_dataset_dir: str = ""
     recent_models: List[str] = field(default_factory=list)
@@ -317,6 +355,7 @@ class ConfigManager:
             "training": asdict(self.config.training),
             "generation": asdict(self.config.generation),
             "captioning": asdict(self.config.captioning),
+            "audio": asdict(self.config.audio),
             "theme": self.config.theme,
             "last_dataset_dir": self.config.last_dataset_dir,
             "recent_models": self.config.recent_models,
@@ -341,6 +380,10 @@ class ConfigManager:
             for k, v in data["captioning"].items():
                 if hasattr(self.config.captioning, k):
                     setattr(self.config.captioning, k, v)
+        if "audio" in data:
+            for k, v in data["audio"].items():
+                if hasattr(self.config.audio, k):
+                    setattr(self.config.audio, k, v)
         for key in ["theme", "last_dataset_dir", "recent_models",
                    "window_geometry", "pipeline_mode"]:
             if key in data:

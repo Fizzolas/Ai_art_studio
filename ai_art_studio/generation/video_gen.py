@@ -214,6 +214,167 @@ class VideoGenerator:
         logger.info(f"Video saved: {filepath}")
         return filepath
 
+    def generate_long_video(
+        self,
+        prompt: str,
+        negative_prompt: str = "",
+        width: int = 512,
+        height: int = 512,
+        frames_per_clip: int = 49,
+        clip_count: int = 3,
+        overlap_frames: int = 4,
+        fps: int = 16,
+        steps: int = 30,
+        cfg_scale: float = 6.0,
+        seed: int = -1,
+        flow_shift: float = 3.0,
+        output_dir: str = "",
+        callback=None,
+    ) -> str:
+        """Generate a long video by stitching multiple clips together."""
+        import torch
+        import gc
+        if self.pipe is None:
+            raise RuntimeError("No video model loaded")
+
+        if seed == -1:
+            seed = int(torch.randint(0, 2**32, (1,)).item())
+
+        if self.model_type == "wan21":
+            frames_per_clip = ((frames_per_clip - 1) // 4) * 4 + 1
+
+        all_clips = []
+        prev_last_frame = None
+        total_ops = clip_count * steps
+        ops_done = 0
+
+        for clip_idx in range(clip_count):
+            logger.info(f"Generating clip {clip_idx + 1}/{clip_count} "
+                        f"(seed={seed + clip_idx})")
+
+            if callback:
+                callback(ops_done, total_ops,
+                        f"Clip {clip_idx + 1}/{clip_count}")
+
+            clip_seed = seed + clip_idx
+            generator = torch.Generator(device="cpu").manual_seed(clip_seed)
+
+            gen_kwargs = {
+                "prompt": prompt,
+                "negative_prompt": negative_prompt or None,
+                "width": width,
+                "height": height,
+                "num_frames": frames_per_clip,
+                "num_inference_steps": steps,
+                "guidance_scale": cfg_scale,
+                "generator": generator,
+            }
+
+            if prev_last_frame is not None:
+                gen_kwargs = self._blend_last_frame(
+                    gen_kwargs, prev_last_frame, clip_seed)
+
+            def _step_cb(pipe, step_idx, timestep, cb_kwargs):
+                nonlocal ops_done
+                ops_done += 1
+                if callback:
+                    callback(ops_done, total_ops,
+                            f"Clip {clip_idx+1}/{clip_count} — step {step_idx+1}/{steps}")
+                return cb_kwargs
+
+            if callback:
+                gen_kwargs["callback_on_step_end"] = _step_cb
+
+            try:
+                output = self.pipe(**gen_kwargs)
+                frames = output.frames[0] if hasattr(output, "frames") else output.images
+            except torch.cuda.OutOfMemoryError:
+                torch.cuda.empty_cache()
+                gc.collect()
+                raise RuntimeError(
+                    f"OOM generating clip {clip_idx + 1}. "
+                    "Try reducing frames_per_clip or resolution."
+                )
+
+            all_clips.append(frames)
+            prev_last_frame = frames[-1]
+
+            torch.cuda.empty_cache()
+            gc.collect()
+
+        stitched = self._stitch_clips(all_clips, overlap_frames)
+
+        output_path = self.save_video(
+            stitched, output_dir, fps=fps,
+            format="mp4", prefix="long_vid"
+        )
+        logger.info(f"Long video saved: {output_path} "
+                    f"({len(stitched)} total frames from {clip_count} clips)")
+        return output_path
+
+    def _blend_last_frame(self, gen_kwargs: dict, last_frame, seed: int) -> dict:
+        """Inject last frame as a soft conditioning hint for the next clip."""
+        try:
+            from PIL import Image
+            import numpy as np
+
+            if isinstance(last_frame, np.ndarray):
+                frame_pil = Image.fromarray(last_frame)
+            elif hasattr(last_frame, 'convert'):
+                frame_pil = last_frame
+            else:
+                return gen_kwargs
+
+            w = gen_kwargs.get("width", 512)
+            h = gen_kwargs.get("height", 512)
+            frame_pil = frame_pil.resize((w, h), Image.LANCZOS)
+
+            if hasattr(self.pipe, "image_encoder") or hasattr(self.pipe, "vae"):
+                gen_kwargs["image"] = frame_pil
+                gen_kwargs["strength"] = 0.75
+                logger.debug("Clip stitching: injecting last frame as img conditioning")
+        except Exception as e:
+            logger.debug(f"Frame blending skipped: {e}")
+
+        return gen_kwargs
+
+    def _stitch_clips(self, clips: list, overlap_frames: int) -> list:
+        """Concatenate clips with linear crossfade at overlap regions."""
+        if len(clips) == 1:
+            return clips[0]
+
+        import numpy as np
+        from PIL import Image
+
+        def to_array(frame):
+            if isinstance(frame, np.ndarray):
+                return frame
+            return np.array(frame)
+
+        def to_pil(arr):
+            return Image.fromarray(arr.astype(np.uint8))
+
+        result = list(clips[0])
+
+        for clip in clips[1:]:
+            if overlap_frames <= 0 or len(result) < overlap_frames or len(clip) < overlap_frames:
+                result.extend(clip)
+                continue
+
+            tail = [to_array(f) for f in result[-overlap_frames:]]
+            result = result[:-overlap_frames]
+            head = [to_array(f) for f in clip[:overlap_frames]]
+            rest = clip[overlap_frames:]
+
+            for i, (a, b) in enumerate(zip(tail, head)):
+                alpha = (i + 1) / (overlap_frames + 1)
+                blended = (a * (1.0 - alpha) + b * alpha).clip(0, 255)
+                result.append(to_pil(blended))
+
+            result.extend(rest)
+
+        return result
+
     def unload(self):
         """Free all GPU memory using the hardened cleanup sequence."""
         from core.gpu_utils import deep_cleanup_pipeline

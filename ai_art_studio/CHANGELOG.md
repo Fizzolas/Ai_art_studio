@@ -1,3 +1,36 @@
+## [0.6.0] — 2026-04-05
+
+### Full End-to-End Audit (Part A)
+- Traced all user flows (startup, dataset, training, generation, settings, gallery) and fixed broken widget references
+- Removed duplicate img2img CollapsibleSection from generation tab (kept standalone tab)
+- Verified all worker error signals connected to visible handlers
+- Confirmed _review_items and _review_index initialized in __init__
+
+### Advanced Image Generation Settings (Part B)
+- Added "Advanced Image Settings" CollapsibleSection with: DDIM Eta, Seamless Tiling, Karras Sigmas, CFG Rescale, Aesthetic Score (SDXL), Negative Aesthetic Score, Denoise Start/End
+- All widgets wired to config auto-save
+- Advanced params (eta, tiling, karras_sigmas, guidance_rescale, aesthetic_score) passed through to image_gen.generate()
+
+### Advanced Video Generation Settings (Part C)
+- Added video resolution preset buttons (480p, 720p, 512², 480²) with portrait variants
+- Added video negative prompt text area and output format selector (mp4/gif/webm)
+- Added "Advanced Video Settings" CollapsibleSection with: Flow Shift (WAN), Decode Chunk Size, Clip Overlap Frames, Clip Count, Spatial Tiling, Sampling Method
+- All advanced video config fields added to GenerationConfig with auto-save wiring
+
+### Long Video via Clip Stitching (Part D)
+- `generate_long_video()` — generates N clips sequentially, each seeded from the last frame of the previous clip, with crossfade overlap stitching. Peak VRAM equals one clip's worth.
+- `_blend_last_frame()` — injects last frame as soft conditioning hint via VAE latent blending
+- `_stitch_clips()` — concatenates clips with linear crossfade at overlap regions
+- GUI routing: clip_count > 1 automatically uses long-video generation path with per-clip progress reporting
+
+### Audio Generation Scaffold (Part E)
+- New `AudioConfig` dataclass in config.py (model, prompt, duration, format, video sync options)
+- New `generation/audio_gen.py` with full AudioGenerator class — MusicGen and AudioLDM2 backends, video duration detection, ffmpeg audio embedding, save with soundfile/scipy fallback
+- GUI scaffold: "Audio Generation (Experimental)" CollapsibleSection with model selector, prompt, duration, guidance scale, video sync toggle, format selector, generate button
+- AudioGenerator exported from generation/__init__.py
+
+---
+
 ## [0.5.0] — 2026-04-05
 
 ### New Features (Batch G)
