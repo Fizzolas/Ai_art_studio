@@ -163,6 +163,23 @@ class GenerationConfig:
     vid_sampler: str = "euler"
     vid_flow_shift: float = 3.0
 
+    # ControlNet
+    controlnet_enabled: bool = False
+    controlnet_model_id: str = "lllyasviel/control_v11p_sd15_canny"
+    controlnet_preprocessor: str = "canny"   # "canny", "depth", "openpose", "none"
+    controlnet_strength: float = 1.0
+    controlnet_guidance_start: float = 0.0
+    controlnet_guidance_end: float = 1.0
+    controlnet_input_image: str = ""
+
+    # IP-Adapter
+    ip_adapter_enabled: bool = False
+    ip_adapter_model: str = "h94/IP-Adapter"
+    ip_adapter_subfolder: str = "models"
+    ip_adapter_weight_name: str = "ip-adapter_sd15.bin"
+    ip_adapter_scale: float = 0.6
+    ip_adapter_image: str = ""
+
     # Output
     output_dir: str = str(OUTPUTS_DIR)
     auto_save: bool = True

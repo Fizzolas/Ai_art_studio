@@ -163,3 +163,61 @@ def warn_if_low_disk(path: str, min_mb: float = 5120.0) -> str:
         return (f"Low disk space: only {free:.0f} MB free. "
                 f"At least {min_mb:.0f} MB recommended.")
     return ""
+
+
+def detect_best_offload_mode() -> str:
+    """Return the best offload_mode string based on available VRAM."""
+    torch = _safe_import_torch()
+    if torch is None or not torch.cuda.is_available():
+        return "cpu_only"
+    try:
+        vram_mb = torch.cuda.get_device_properties(0).total_memory / 1024 / 1024
+        if vram_mb >= 12000:
+            return "none"
+        elif vram_mb >= 8000:
+            return "balanced"
+        elif vram_mb >= 4000:
+            return "aggressive"
+        else:
+            return "cpu_only"
+    except Exception:
+        return "balanced"
+
+
+def detect_hardware_profile() -> dict:
+    """Return dict of detected hardware info."""
+    torch = _safe_import_torch()
+    info = {
+        "gpu_name": "None",
+        "vram_total_mb": 0,
+        "cuda_version": "N/A",
+        "recommended_offload": "cpu_only",
+    }
+    if torch is not None and torch.cuda.is_available():
+        try:
+            props = torch.cuda.get_device_properties(0)
+            info["gpu_name"] = props.name
+            info["vram_total_mb"] = props.total_memory // (1024 * 1024)
+            info["cuda_version"] = torch.version.cuda or "N/A"
+            info["recommended_offload"] = detect_best_offload_mode()
+        except Exception:
+            pass
+    return info
+
+
+def apply_low_vram_defaults(config) -> bool:
+    """If VRAM < 6GB, enable tiling/slicing. Returns True if changes were made."""
+    torch = _safe_import_torch()
+    if torch is None or not torch.cuda.is_available():
+        return False
+    try:
+        vram_mb = torch.cuda.get_device_properties(0).total_memory / 1024 / 1024
+        if vram_mb < 6000:
+            config.hardware.vae_tiling = True
+            config.hardware.vae_slicing = True
+            config.hardware.attention_slicing = True
+            config.hardware.vae_offload = True
+            return True
+    except Exception:
+        pass
+    return False

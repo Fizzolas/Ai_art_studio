@@ -29,6 +29,7 @@ from PyQt6.QtWidgets import (
     QComboBox, QLineEdit, QCheckBox, QSizePolicy, QApplication,
     QPlainTextEdit, QStackedWidget, QToolButton, QStatusBar,
     QMenu, QDialog, QTableWidget, QTableWidgetItem, QHeaderView,
+    QInputDialog,
 )
 from PyQt6.QtCore import (
     Qt, QThread, pyqtSignal, QTimer, QSize, QMimeData,
@@ -479,8 +480,10 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self._build_dataset_tab(), "📂  Dataset")
         self.tabs.addTab(self._build_training_tab(), "🎯  Training")
         self.tabs.addTab(self._build_generation_tab(), "🎨  Generate")
+        self.tabs.addTab(self._build_img2img_tab(), "🖌  img2img")
         self.tabs.addTab(self._build_settings_tab(), "⚙️  Settings")
         self.tabs.addTab(self._build_gallery_tab(), "🖼  Gallery")
+        self.tabs.addTab(self._build_models_tab(), "📦  Models")
 
         main_layout.addWidget(self.tabs, 1)
 
@@ -1212,6 +1215,29 @@ class MainWindow(QMainWindow):
 
         # Prompt
         prompt_section = CollapsibleSection("Prompt")
+
+        # Style preset bar
+        preset_row = QHBoxLayout()
+        self.style_preset_combo = QComboBox()
+        self.style_preset_combo.setPlaceholderText("Style preset...")
+        self._reload_style_presets()
+        preset_row.addWidget(self.style_preset_combo, 1)
+        apply_preset_btn = QPushButton("Apply")
+        apply_preset_btn.setFixedWidth(60)
+        apply_preset_btn.clicked.connect(self._apply_style_preset)
+        preset_row.addWidget(apply_preset_btn)
+        save_preset_btn = QPushButton("Save")
+        save_preset_btn.setFixedWidth(50)
+        save_preset_btn.clicked.connect(self._save_style_preset)
+        preset_row.addWidget(save_preset_btn)
+        delete_preset_btn = QPushButton("Del")
+        delete_preset_btn.setFixedWidth(40)
+        delete_preset_btn.clicked.connect(self._delete_style_preset)
+        preset_row.addWidget(delete_preset_btn)
+        preset_widget = QWidget()
+        preset_widget.setLayout(preset_row)
+        prompt_section.addWidget(preset_widget)
+
         prompt_section.addWidget(QLabel("Positive:"))
         self.gen_prompt = QTextEdit()
         self.gen_prompt.setMaximumHeight(90)
@@ -1294,8 +1320,8 @@ class MainWindow(QMainWindow):
         hires_section.addWidget(self.hires_denoise)
         left_layout.addWidget(hires_section)
 
-        # ControlNet / IP-Adapter
-        controlnet_section = CollapsibleSection("ControlNet / IP-Adapter", start_collapsed=True)
+        # ControlNet
+        controlnet_section = CollapsibleSection("ControlNet", start_collapsed=True)
         self.controlnet_enabled = LabeledCheck("Enable ControlNet", False)
         self.controlnet_model = LabeledCombo("ControlNet Model", [
             "lllyasviel/control_v11p_sd15_canny",
@@ -1303,28 +1329,115 @@ class MainWindow(QMainWindow):
             "lllyasviel/control_v11p_sd15_openpose",
             "diffusers/controlnet-canny-sdxl-1.0",
             "diffusers/controlnet-depth-sdxl-1.0",
-        ], "lllyasviel/control_v11p_sd15_canny")
-        self.controlnet_input = PathSelector("Control Image", mode="file")
-        self.controlnet_strength = LabeledSlider("Control Strength", 0.0, 2.0, 1.0, 0.05, 2)
+        ], self.cfg.config.generation.controlnet_model_id)
         self.controlnet_preprocessor = LabeledCombo("Preprocessor", [
-            "none", "canny", "depth_midas", "openpose"
-        ], "none")
+            "canny", "depth", "openpose", "none"
+        ], self.cfg.config.generation.controlnet_preprocessor)
+        self.controlnet_input = PathSelector("Control Image", mode="file",
+            filter="Images (*.png *.jpg *.jpeg *.webp *.bmp);;All files (*)")
+        self.controlnet_preview_btn = QPushButton("Preview Conditioning")
+        self.controlnet_preview_btn.clicked.connect(self._preview_controlnet)
+        self.controlnet_preview_label = QLabel()
+        self.controlnet_preview_label.setFixedSize(160, 160)
+        self.controlnet_preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.controlnet_preview_label.setStyleSheet(
+            "background-color: #0a1628; border: 1px solid #21262d; border-radius: 6px;")
+        self.controlnet_strength = LabeledSlider("Control Strength", 0.0, 2.0,
+            self.cfg.config.generation.controlnet_strength, 0.05, 2)
+        self.controlnet_guidance_start = LabeledSlider("Guidance Start", 0.0, 1.0,
+            self.cfg.config.generation.controlnet_guidance_start, 0.05, 2)
+        self.controlnet_guidance_end = LabeledSlider("Guidance End", 0.0, 1.0,
+            self.cfg.config.generation.controlnet_guidance_end, 0.05, 2)
+
         controlnet_section.addWidget(self.controlnet_enabled)
         controlnet_section.addWidget(self.controlnet_model)
-        controlnet_section.addWidget(self.controlnet_input)
-        controlnet_section.addWidget(self.controlnet_strength)
         controlnet_section.addWidget(self.controlnet_preprocessor)
+        controlnet_section.addWidget(self.controlnet_input)
+        cn_preview_row = QHBoxLayout()
+        cn_preview_row.addWidget(self.controlnet_preview_btn)
+        cn_preview_row.addStretch()
+        cn_preview_widget = QWidget()
+        cn_preview_widget.setLayout(cn_preview_row)
+        controlnet_section.addWidget(cn_preview_widget)
+        controlnet_section.addWidget(self.controlnet_preview_label)
+        controlnet_section.addWidget(self.controlnet_strength)
+        controlnet_section.addWidget(self.controlnet_guidance_start)
+        controlnet_section.addWidget(self.controlnet_guidance_end)
+
+        # Auto-save ControlNet settings
+        self.controlnet_enabled.toggled.connect(
+            lambda v: self.cfg.update_and_save("generation", "controlnet_enabled", v))
+        self.controlnet_model.currentTextChanged.connect(
+            lambda v: self.cfg.update_and_save("generation", "controlnet_model_id", v))
+        self.controlnet_preprocessor.currentTextChanged.connect(
+            lambda v: self.cfg.update_and_save("generation", "controlnet_preprocessor", v))
+        self.controlnet_input.pathChanged.connect(
+            lambda v: self.cfg.update_and_save("generation", "controlnet_input_image", v))
+        self.controlnet_strength.valueChanged.connect(
+            lambda v: self.cfg.update_and_save("generation", "controlnet_strength", v))
+        self.controlnet_guidance_start.valueChanged.connect(
+            lambda v: self.cfg.update_and_save("generation", "controlnet_guidance_start", v))
+        self.controlnet_guidance_end.valueChanged.connect(
+            lambda v: self.cfg.update_and_save("generation", "controlnet_guidance_end", v))
+
         left_layout.addWidget(controlnet_section)
+
+        # IP-Adapter Style Reference
+        ip_section = CollapsibleSection("Style Reference (IP-Adapter)", start_collapsed=True)
+        self.ip_adapter_enabled = LabeledCheck("Enable IP-Adapter",
+            default=self.cfg.config.generation.ip_adapter_enabled)
+        self.ip_adapter_image = PathSelector("Reference Image", mode="file",
+            filter="Images (*.png *.jpg *.jpeg *.webp *.bmp);;All files (*)")
+        self.ip_adapter_preview = QLabel()
+        self.ip_adapter_preview.setFixedSize(100, 100)
+        self.ip_adapter_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.ip_adapter_preview.setStyleSheet(
+            "background-color: #0a1628; border: 1px solid #21262d; border-radius: 6px;")
+        self.ip_adapter_image.pathChanged.connect(self._update_ip_adapter_preview)
+        self.ip_adapter_scale = LabeledSlider("IP-Adapter Scale", 0.0, 1.0,
+            self.cfg.config.generation.ip_adapter_scale, 0.05, 2)
+        ip_info = QLabel("Style reference steers visual style without full img2img.\n"
+                         "Uses IP-Adapter from h94/IP-Adapter.")
+        ip_info.setStyleSheet("font-size: 11px; color: #556a8b;")
+        ip_info.setWordWrap(True)
+
+        ip_section.addWidget(self.ip_adapter_enabled)
+        ip_section.addWidget(self.ip_adapter_image)
+        ip_section.addWidget(self.ip_adapter_preview)
+        ip_section.addWidget(self.ip_adapter_scale)
+        ip_section.addWidget(ip_info)
+
+        # Auto-save IP-Adapter settings
+        self.ip_adapter_enabled.toggled.connect(
+            lambda v: self.cfg.update_and_save("generation", "ip_adapter_enabled", v))
+        self.ip_adapter_image.pathChanged.connect(
+            lambda v: self.cfg.update_and_save("generation", "ip_adapter_image", v))
+        self.ip_adapter_scale.valueChanged.connect(
+            lambda v: self.cfg.update_and_save("generation", "ip_adapter_scale", v))
+
+        left_layout.addWidget(ip_section)
 
         # Image Upscaling
         upscale_section = CollapsibleSection("Image Upscaling", start_collapsed=True)
-        self.upscale_input = PathSelector("Input Image", mode="file")
-        self.upscale_factor = LabeledCombo("Scale Factor", ["2x", "4x"], "2x")
+        self.upscale_input = PathSelector("Input Image", mode="file",
+            filter="Images (*.png *.jpg *.jpeg *.webp *.bmp);;All files (*)")
+        self.upscale_factor = LabeledCombo("Scale Factor",
+            ["2x (AI)", "4x (AI)", "2x (Lanczos)", "4x (Lanczos)"], "4x (AI)")
         upscale_btn = QPushButton("Upscale Image")
         upscale_btn.clicked.connect(self._upscale_image)
         upscale_section.addWidget(self.upscale_input)
         upscale_section.addWidget(self.upscale_factor)
         upscale_section.addWidget(upscale_btn)
+        # Show availability note
+        try:
+            from generation.upscaler import is_realesrgan_available
+            if not is_realesrgan_available():
+                esrgan_note = QLabel("Install realesrgan for AI upscaling (pip install realesrgan)")
+                esrgan_note.setStyleSheet("font-size: 11px; color: #f0883e;")
+                esrgan_note.setWordWrap(True)
+                upscale_section.addWidget(esrgan_note)
+        except Exception:
+            pass
         left_layout.addWidget(upscale_section)
 
         # Video parameters
@@ -1347,17 +1460,40 @@ class MainWindow(QMainWindow):
         left_layout.addWidget(self.vid_params_section)
 
         # ── Prompt Queue ──
-        queue_section = CollapsibleSection("Prompt Queue", start_collapsed=True)
-        self.prompt_queue = QPlainTextEdit()
-        self.prompt_queue.setPlaceholderText("Enter one prompt per line for batch generation...")
-        self.prompt_queue.setMaximumHeight(150)
-        queue_section.addWidget(self.prompt_queue)
-        run_queue_btn = QPushButton("Run Queue")
-        run_queue_btn.clicked.connect(self._run_prompt_queue)
-        queue_section.addWidget(run_queue_btn)
+        # ── Generation Queue ──
+        queue_section = CollapsibleSection("Generation Queue", start_collapsed=True)
+        queue_btn_row = QHBoxLayout()
+        add_queue_btn = QPushButton("Add to Queue")
+        add_queue_btn.clicked.connect(self._add_to_gen_queue)
+        queue_btn_row.addWidget(add_queue_btn)
+        clear_queue_btn = QPushButton("Clear")
+        clear_queue_btn.clicked.connect(self._clear_gen_queue)
+        queue_btn_row.addWidget(clear_queue_btn)
+        self.pause_queue_btn = QPushButton("Pause")
+        self.pause_queue_btn.clicked.connect(self._toggle_queue_pause)
+        queue_btn_row.addWidget(self.pause_queue_btn)
+        queue_btn_widget = QWidget()
+        queue_btn_widget.setLayout(queue_btn_row)
+        queue_section.addWidget(queue_btn_widget)
+        self.gen_queue_list = QListWidget()
+        self.gen_queue_list.setMaximumHeight(150)
+        self.gen_queue_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.gen_queue_list.customContextMenuRequested.connect(self._queue_context_menu)
+        queue_section.addWidget(self.gen_queue_list)
         self.queue_progress_label = QLabel("")
         queue_section.addWidget(self.queue_progress_label)
         left_layout.addWidget(queue_section)
+
+        # Prompt Queue (legacy batch-by-line)
+        pq_section = CollapsibleSection("Prompt Queue (Batch)", start_collapsed=True)
+        self.prompt_queue = QPlainTextEdit()
+        self.prompt_queue.setPlaceholderText("Enter one prompt per line for batch generation...")
+        self.prompt_queue.setMaximumHeight(150)
+        pq_section.addWidget(self.prompt_queue)
+        run_queue_btn = QPushButton("Run Queue")
+        run_queue_btn.clicked.connect(self._run_prompt_queue)
+        pq_section.addWidget(run_queue_btn)
+        left_layout.addWidget(pq_section)
 
         # Generate button (always visible at bottom)
         left_layout.addStretch()
@@ -1486,6 +1622,407 @@ class MainWindow(QMainWindow):
         layout.addWidget(splitter)
 
         return tab
+
+    # ═══════════════════════════════════════════════════════════════════════
+    #  IMG2IMG TAB
+    # ═══════════════════════════════════════════════════════════════════════
+
+    def _build_img2img_tab(self) -> QWidget:
+        tab = QWidget()
+        layout = QHBoxLayout(tab)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+
+        # ── Left: Controls ──
+        left_inner = QWidget()
+        left_layout = QVBoxLayout(left_inner)
+        left_layout.setContentsMargins(12, 12, 8, 12)
+        left_layout.setSpacing(10)
+
+        # Input image
+        input_section = CollapsibleSection("Input Image")
+        self.i2i_input = PathSelector("Image", mode="file",
+            filter="Images (*.png *.jpg *.jpeg *.webp *.bmp);;All files (*)")
+        self.i2i_preview = QLabel("Drag & drop or browse")
+        self.i2i_preview.setFixedSize(256, 256)
+        self.i2i_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.i2i_preview.setStyleSheet(
+            "background-color: #0a1628; border: 1px solid #21262d; border-radius: 8px; color: #484f58;")
+        self.i2i_input.pathChanged.connect(self._update_i2i_preview)
+        input_section.addWidget(self.i2i_input)
+        input_section.addWidget(self.i2i_preview)
+        left_layout.addWidget(input_section)
+
+        # Prompt
+        prompt_section = CollapsibleSection("Prompt")
+        prompt_section.addWidget(QLabel("Positive:"))
+        self.i2i_prompt = QTextEdit()
+        self.i2i_prompt.setMaximumHeight(90)
+        self.i2i_prompt.setMinimumHeight(60)
+        self.i2i_prompt.setPlaceholderText("Describe the desired output...")
+        prompt_section.addWidget(self.i2i_prompt)
+        prompt_section.addWidget(QLabel("Negative:"))
+        self.i2i_negative = QTextEdit()
+        self.i2i_negative.setMaximumHeight(55)
+        self.i2i_negative.setPlainText(self.cfg.config.generation.img_negative_prompt)
+        prompt_section.addWidget(self.i2i_negative)
+        left_layout.addWidget(prompt_section)
+
+        # Parameters
+        params_section = CollapsibleSection("Parameters")
+        self.i2i_denoising = LabeledSlider("Denoising Strength", 0.0, 1.0, 0.75, 0.01, 2,
+            tooltip="0.0 = no change, 1.0 = completely new image")
+        params_section.addWidget(self.i2i_denoising)
+        self.i2i_steps = LabeledSlider("Steps", 1, 150, 30, 1)
+        params_section.addWidget(self.i2i_steps)
+        self.i2i_cfg = LabeledSlider("CFG Scale", 1, 30, 7.5, 0.5, 1)
+        params_section.addWidget(self.i2i_cfg)
+        self.i2i_sampler = LabeledCombo("Sampler",
+            ["euler_a", "euler", "dpm++_2m", "dpm++_2m_karras", "dpm++_sde",
+             "dpm++_sde_karras", "ddim", "uni_pc", "heun", "lms", "pndm"],
+            "euler_a")
+        params_section.addWidget(self.i2i_sampler)
+        self.i2i_seed = LabeledSlider("Seed (-1 = random)", -1, 999999999, -1, 1)
+        params_section.addWidget(self.i2i_seed)
+        self.i2i_width = LabeledSlider("Width", 256, 2048, 768, 64)
+        params_section.addWidget(self.i2i_width)
+        self.i2i_height = LabeledSlider("Height", 256, 2048, 768, 64)
+        params_section.addWidget(self.i2i_height)
+        left_layout.addWidget(params_section)
+
+        # Generate button
+        left_layout.addStretch()
+        self.i2i_generate_btn = QPushButton("Generate img2img")
+        self.i2i_generate_btn.setObjectName("primary")
+        self.i2i_generate_btn.setMinimumHeight(44)
+        btn_font = self.i2i_generate_btn.font()
+        btn_font.setPointSize(13)
+        btn_font.setBold(True)
+        self.i2i_generate_btn.setFont(btn_font)
+        self.i2i_generate_btn.clicked.connect(self._generate_img2img)
+        left_layout.addWidget(self.i2i_generate_btn)
+        self.i2i_progress = QProgressBar()
+        self.i2i_progress.setVisible(False)
+        left_layout.addWidget(self.i2i_progress)
+
+        left_scroll = make_scroll_panel(left_inner)
+        left_scroll.setMinimumWidth(320)
+
+        # ── Right: Output ──
+        right_panel = QWidget()
+        right_layout = QVBoxLayout(right_panel)
+        right_layout.setContentsMargins(8, 12, 12, 12)
+        right_layout.setSpacing(8)
+
+        self.i2i_output = QLabel("img2img results will appear here")
+        self.i2i_output.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.i2i_output.setMinimumSize(300, 300)
+        self.i2i_output.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.i2i_output.setStyleSheet(
+            "background-color: #161b22; border-radius: 12px;"
+            "color: #484f58; font-size: 14px; border: 1px solid #21262d;")
+        right_layout.addWidget(self.i2i_output, 1)
+
+        out_ctrl = QHBoxLayout()
+        self.i2i_save_btn = QPushButton("Save Image")
+        self.i2i_save_btn.clicked.connect(self._save_i2i)
+        self.i2i_save_btn.setEnabled(False)
+        out_ctrl.addWidget(self.i2i_save_btn)
+        out_ctrl.addStretch()
+        right_layout.addLayout(out_ctrl)
+
+        self.i2i_info = QLabel("")
+        self.i2i_info.setObjectName("muted")
+        self.i2i_info.setWordWrap(True)
+        right_layout.addWidget(self.i2i_info)
+
+        splitter.addWidget(left_scroll)
+        splitter.addWidget(right_panel)
+        splitter.setSizes([400, 600])
+        splitter.setStretchFactor(0, 0)
+        splitter.setStretchFactor(1, 1)
+        layout.addWidget(splitter)
+        return tab
+
+    def _update_i2i_preview(self, path):
+        if not path or not Path(path).exists():
+            self.i2i_preview.setText("Drag & drop or browse")
+            return
+        try:
+            pixmap = QPixmap(path).scaled(
+                256, 256, Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation)
+            self.i2i_preview.setPixmap(pixmap)
+        except Exception:
+            self.i2i_preview.setText("Preview failed")
+
+    def _generate_img2img(self):
+        if not self.image_generator or not self.image_generator.pipe:
+            QMessageBox.warning(self, "Error", "Load a model first (Generate tab).")
+            return
+        prompt = self.i2i_prompt.toPlainText().strip()
+        if not prompt:
+            QMessageBox.warning(self, "Error", "Enter a prompt.")
+            return
+        input_path = self.i2i_input.path()
+        if not input_path or not Path(input_path).exists():
+            QMessageBox.warning(self, "Error", "Select an input image.")
+            return
+
+        self.i2i_generate_btn.setEnabled(False)
+        self.i2i_progress.setVisible(True)
+        self.i2i_progress.setValue(0)
+        self.i2i_info.setText("Generating...")
+
+        kwargs = {
+            "prompt": prompt,
+            "negative_prompt": self.i2i_negative.toPlainText().strip(),
+            "width": int(self.i2i_width.value()),
+            "height": int(self.i2i_height.value()),
+            "steps": int(self.i2i_steps.value()),
+            "cfg_scale": self.i2i_cfg.value(),
+            "seed": int(self.i2i_seed.value()),
+            "sampler": self.i2i_sampler.currentText(),
+            "init_image": input_path,
+            "strength": self.i2i_denoising.value(),
+        }
+
+        worker = GenerationWorker(self.image_generator, "image", **kwargs)
+        worker.progress.connect(lambda s, t: (
+            self.i2i_progress.setMaximum(t),
+            self.i2i_progress.setValue(s),
+        ))
+        worker.finished.connect(self._on_i2i_complete)
+        worker.error.connect(self._on_i2i_error)
+        self._track_worker(worker)
+        worker.start()
+
+    def _on_i2i_complete(self, images):
+        self.i2i_generate_btn.setEnabled(True)
+        self.i2i_progress.setVisible(False)
+        self._i2i_images = images
+        if images:
+            img = images[0]
+            buffer = BytesIO()
+            img.save(buffer, format="PNG")
+            buffer.seek(0)
+            qimg = QImage()
+            qimg.loadFromData(buffer.read())
+            pixmap = QPixmap.fromImage(qimg).scaled(
+                self.i2i_output.size(),
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation)
+            self.i2i_output.setPixmap(pixmap)
+            self.i2i_save_btn.setEnabled(True)
+            self.i2i_info.setText(f"Generated {len(images)} image(s)  |  {img.width}x{img.height}")
+
+    def _on_i2i_error(self, error):
+        self.i2i_generate_btn.setEnabled(True)
+        self.i2i_progress.setVisible(False)
+        self.i2i_info.setText(f"Error: {error}")
+        QMessageBox.critical(self, "img2img Error", error)
+
+    def _save_i2i(self):
+        if not hasattr(self, '_i2i_images') or not self._i2i_images:
+            return
+        path, _ = QFileDialog.getSaveFileName(self, "Save Image", "",
+            "PNG (*.png);;JPEG (*.jpg);;WebP (*.webp)")
+        if path:
+            self._i2i_images[0].save(path, quality=95)
+            self.i2i_info.setText(f"Saved: {path}")
+
+    # ═══════════════════════════════════════════════════════════════════════
+    #  MODEL BROWSER TAB (Task 11)
+    # ═══════════════════════════════════════════════════════════════════════
+
+    MODEL_REGISTRY = [
+        {"name": "Stable Diffusion 1.5", "repo": "stable-diffusion-v1-5/stable-diffusion-v1-5",
+         "type": "Image — SD1.5", "size": "~4.3 GB",
+         "description": "Classic SD 1.5. Fast, well-supported, huge ecosystem of LoRAs.",
+         "tags": ["sd15", "image"]},
+        {"name": "SDXL Base 1.0", "repo": "stabilityai/stable-diffusion-xl-base-1.0",
+         "type": "Image — SDXL", "size": "~6.9 GB",
+         "description": "High-resolution 1024px generation. State of the art for photorealism.",
+         "tags": ["sdxl", "image"]},
+        {"name": "SDXL VAE fp16-fix", "repo": "madebyollin/sdxl-vae-fp16-fix",
+         "type": "VAE — SDXL", "size": "~160 MB",
+         "description": "Fixed SDXL VAE that doesn't NaN in fp16. Required for SDXL quality.",
+         "tags": ["sdxl", "vae"]},
+        {"name": "FLUX.1-dev", "repo": "black-forest-labs/FLUX.1-dev",
+         "type": "Image — Flux", "size": "~32 GB",
+         "description": "State of the art diffusion transformer. Requires 16GB+ VRAM.",
+         "tags": ["flux", "image"]},
+        {"name": "FLUX.1-schnell", "repo": "black-forest-labs/FLUX.1-schnell",
+         "type": "Image — Flux (fast)", "size": "~32 GB",
+         "description": "4-step distilled FLUX model. Apache 2.0 license.",
+         "tags": ["flux", "image"]},
+        {"name": "Wan 2.1 T2V 1.3B", "repo": "Wan-AI/Wan2.1-T2V-1.3B",
+         "type": "Video", "size": "~11 GB",
+         "description": "Text-to-video model. Works on 8GB VRAM with balanced offloading.",
+         "tags": ["video"]},
+        {"name": "ControlNet Canny SD1.5", "repo": "lllyasviel/control_v11p_sd15_canny",
+         "type": "ControlNet — SD1.5", "size": "~1.5 GB",
+         "description": "Canny edge ControlNet for SD1.5.",
+         "tags": ["controlnet", "sd15"]},
+        {"name": "ControlNet Depth SD1.5", "repo": "lllyasviel/control_v11f1p_sd15_depth",
+         "type": "ControlNet — SD1.5", "size": "~1.5 GB",
+         "description": "Depth map ControlNet for SD1.5.",
+         "tags": ["controlnet", "sd15"]},
+        {"name": "ControlNet Canny SDXL", "repo": "diffusers/controlnet-canny-sdxl-1.0",
+         "type": "ControlNet — SDXL", "size": "~2.5 GB",
+         "description": "Canny edge ControlNet for SDXL.",
+         "tags": ["controlnet", "sdxl"]},
+        {"name": "IP-Adapter SD1.5", "repo": "h94/IP-Adapter",
+         "type": "IP-Adapter — SD1.5", "size": "~360 MB",
+         "description": "Style reference adapter. Steers generation toward reference image style.",
+         "tags": ["ip-adapter", "sd15"]},
+        {"name": "BLIP-2 (2.7B)", "repo": "Salesforce/blip2-opt-2.7b",
+         "type": "Captioning", "size": "~5.5 GB",
+         "description": "Powerful image captioning for dataset preparation.",
+         "tags": ["captioning"]},
+        {"name": "WD SwinV2 Tagger v3", "repo": "SmilingWolf/wd-swinv2-tagger-v3",
+         "type": "Captioning", "size": "~350 MB",
+         "description": "Fast tag-based captioner. Essential for anime/art datasets.",
+         "tags": ["captioning"]},
+    ]
+
+    def _build_models_tab(self) -> QWidget:
+        tab = QWidget()
+        outer_layout = QVBoxLayout(tab)
+        outer_layout.setContentsMargins(12, 12, 12, 12)
+        outer_layout.setSpacing(8)
+
+        # Filter bar
+        filter_row = QHBoxLayout()
+        self.model_search = QLineEdit()
+        self.model_search.setPlaceholderText("Search models...")
+        self.model_search.textChanged.connect(self._filter_model_cards)
+        filter_row.addWidget(self.model_search, 1)
+        self._model_tag_filter = "all"
+        for tag_label in ["All", "Image", "Video", "ControlNet", "Captioning"]:
+            btn = QPushButton(tag_label)
+            btn.setCheckable(True)
+            btn.setChecked(tag_label == "All")
+            btn.setMaximumWidth(100)
+            btn.setStyleSheet("QPushButton:checked { background: #1f6feb; color: white; }")
+            btn.clicked.connect(lambda _, t=tag_label: self._set_model_tag_filter(t))
+            filter_row.addWidget(btn)
+        outer_layout.addLayout(filter_row)
+
+        # Scrollable card area
+        self._model_card_widgets = []
+        scroll_inner = QWidget()
+        self._model_cards_layout = QVBoxLayout(scroll_inner)
+        self._model_cards_layout.setSpacing(8)
+
+        for entry in self.MODEL_REGISTRY:
+            card = self._create_model_card(entry)
+            self._model_cards_layout.addWidget(card)
+            self._model_card_widgets.append((entry, card))
+
+        self._model_cards_layout.addStretch()
+        scroll = make_scroll_panel(scroll_inner)
+        outer_layout.addWidget(scroll, 1)
+        return tab
+
+    def _create_model_card(self, entry: dict) -> QFrame:
+        card = QFrame()
+        card.setStyleSheet(
+            "QFrame { background: #161b22; border: 1px solid #21262d;"
+            "border-radius: 8px; padding: 10px; }")
+        layout = QHBoxLayout(card)
+        layout.setSpacing(12)
+
+        # Info side
+        info_layout = QVBoxLayout()
+        name_lbl = QLabel(f"<b>{entry['name']}</b>")
+        name_lbl.setStyleSheet("font-size: 14px; color: #c9d1d9; background: transparent;")
+        info_layout.addWidget(name_lbl)
+
+        type_lbl = QLabel(f"{entry['type']}  •  {entry['size']}")
+        type_lbl.setStyleSheet("font-size: 11px; color: #8b949e; background: transparent;")
+        info_layout.addWidget(type_lbl)
+
+        desc_lbl = QLabel(entry['description'])
+        desc_lbl.setWordWrap(True)
+        desc_lbl.setStyleSheet("font-size: 12px; color: #8b949e; background: transparent;")
+        info_layout.addWidget(desc_lbl)
+
+        status_lbl = QLabel()
+        status_lbl.setObjectName("model_status")
+        status_lbl.setStyleSheet("font-size: 11px; background: transparent;")
+        info_layout.addWidget(status_lbl)
+        card._status_label = status_lbl
+        card._repo = entry['repo']
+        card._tags = entry.get('tags', [])
+        card._name = entry['name']
+        layout.addLayout(info_layout, 1)
+
+        # Button side
+        btn_layout = QVBoxLayout()
+        dl_btn = QPushButton("Download")
+        dl_btn.setFixedWidth(100)
+        dl_btn.clicked.connect(lambda _, r=entry['repo'], k=entry['name'], b=dl_btn:
+                               self._download_model_card(r, k, b))
+        btn_layout.addWidget(dl_btn)
+        card._dl_btn = dl_btn
+        btn_layout.addStretch()
+        layout.addLayout(btn_layout)
+
+        # Check status
+        self._check_model_status(card)
+        return card
+
+    def _check_model_status(self, card):
+        """Check if a model is downloaded in HF cache."""
+        try:
+            cache_dir = Path.home() / ".cache" / "huggingface" / "hub"
+            slug = "models--" + card._repo.replace("/", "--")
+            if (cache_dir / slug).exists():
+                card._status_label.setText("Downloaded ✓")
+                card._status_label.setStyleSheet(
+                    "color: #3fb950; font-size: 11px; background: transparent;")
+                card._dl_btn.setEnabled(False)
+                card._dl_btn.setText("Downloaded")
+            else:
+                card._status_label.setText("Not downloaded")
+                card._status_label.setStyleSheet(
+                    "color: #8b949e; font-size: 11px; background: transparent;")
+        except Exception:
+            pass
+
+    def _download_model_card(self, repo: str, key: str, btn):
+        btn.setEnabled(False)
+        btn.setText("Downloading...")
+        worker = ModelDownloadWorker(key, repo)
+        worker.progress.connect(lambda msg: btn.setText(msg[:18] + "..."))
+        worker.finished.connect(lambda k: (
+            btn.setText("Downloaded"),
+            self._refresh_model_cards()))
+        worker.error.connect(lambda k, e: (
+            btn.setText("Download"),
+            btn.setEnabled(True),
+            QMessageBox.warning(self, "Download Error", e)))
+        self._track_worker(worker)
+        worker.start()
+
+    def _refresh_model_cards(self):
+        for entry, card in self._model_card_widgets:
+            self._check_model_status(card)
+
+    def _filter_model_cards(self, text=""):
+        search = text.lower() if text else self.model_search.text().lower()
+        tag_filter = self._model_tag_filter.lower()
+        for entry, card in self._model_card_widgets:
+            name_match = search in entry['name'].lower() or search in entry.get('description', '').lower()
+            tag_match = tag_filter == "all" or tag_filter in [t.lower() for t in entry.get('tags', [])]
+            card.setVisible(name_match and tag_match)
+
+    def _set_model_tag_filter(self, tag):
+        self._model_tag_filter = tag
+        self._filter_model_cards()
 
     # ═══════════════════════════════════════════════════════════════════════
     #  SETTINGS TAB
@@ -2641,6 +3178,8 @@ class MainWindow(QMainWindow):
         else:
             from generation.image_gen import ImageGenerator
             self.image_generator = ImageGenerator(self.cfg.config.hardware)
+            self.image_generator._oom_callback = lambda mode: self._notify(
+                f"Low VRAM — auto-switched to {mode} offloading", level="warning")
             generator = self.image_generator
 
         worker = ModelLoadWorker(generator, model_path, model_type)
@@ -2685,8 +3224,74 @@ class MainWindow(QMainWindow):
         if row >= 0:
             self.embed_list.takeItem(row)
 
+    def _reload_style_presets(self):
+        from configs.prompt_presets import load_presets
+        self._style_presets = load_presets()
+        self.style_preset_combo.clear()
+        self.style_preset_combo.addItems(list(self._style_presets.keys()))
+
+    def _apply_style_preset(self):
+        name = self.style_preset_combo.currentText()
+        suffix = self._style_presets.get(name, "")
+        current = self.gen_prompt.toPlainText().rstrip()
+        if suffix and suffix not in current:
+            self.gen_prompt.setPlainText(current + (", " if current else "") + suffix)
+
+    def _save_style_preset(self):
+        from configs.prompt_presets import save_presets
+        name, ok = QInputDialog.getText(self, "Save Style Preset", "Preset name:")
+        if ok and name:
+            self._style_presets[name] = self.gen_prompt.toPlainText().strip()
+            save_presets(self._style_presets)
+            self._reload_style_presets()
+            self._notify(f"Preset '{name}' saved", "success")
+
+    def _delete_style_preset(self):
+        from configs.prompt_presets import save_presets
+        name = self.style_preset_combo.currentText()
+        if name and name in self._style_presets:
+            del self._style_presets[name]
+            save_presets(self._style_presets)
+            self._reload_style_presets()
+
+    def _preview_controlnet(self):
+        """Run the ControlNet preprocessor on the input image and show preview."""
+        input_path = self.controlnet_input.path()
+        if not input_path or not Path(input_path).exists():
+            QMessageBox.warning(self, "No Input", "Select a control image first.")
+            return
+        try:
+            from generation.image_gen import ImageGenerator
+            gen = ImageGenerator()
+            preprocessor = self.controlnet_preprocessor.currentText()
+            result = gen._preprocess_controlnet_image(
+                input_path, preprocessor, 512, 512)
+            buffer = BytesIO()
+            result.save(buffer, format="PNG")
+            buffer.seek(0)
+            qimg = QImage()
+            qimg.loadFromData(buffer.read())
+            pixmap = QPixmap.fromImage(qimg).scaled(
+                160, 160, Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation)
+            self.controlnet_preview_label.setPixmap(pixmap)
+        except Exception as e:
+            self.controlnet_preview_label.setText(f"Error: {e}")
+
+    def _update_ip_adapter_preview(self, path):
+        """Show thumbnail of IP-Adapter reference image."""
+        if not path or not Path(path).exists():
+            self.ip_adapter_preview.clear()
+            return
+        try:
+            pixmap = QPixmap(path).scaled(
+                100, 100, Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation)
+            self.ip_adapter_preview.setPixmap(pixmap)
+        except Exception:
+            self.ip_adapter_preview.setText("Preview failed")
+
     def _upscale_image(self):
-        # TODO: Add Real-ESRGAN / SwinIR for AI upscaling
         input_path = self.upscale_input.path()
         if not input_path or not Path(input_path).exists():
             QMessageBox.warning(self, "No Input", "Select an input image first.")
@@ -2698,9 +3303,16 @@ class MainWindow(QMainWindow):
         try:
             from PIL import Image
             img = Image.open(input_path)
-            factor = 2 if self.upscale_factor.currentText() == "2x" else 4
-            new_size = (img.width * factor, img.height * factor)
-            upscaled = img.resize(new_size, Image.LANCZOS)
+            choice = self.upscale_factor.currentText()
+            factor = 2 if "2x" in choice else 4
+            use_ai = "AI" in choice
+
+            if use_ai:
+                from generation.upscaler import upscale_image
+                upscaled = upscale_image(img, scale=factor)
+            else:
+                new_size = (img.width * factor, img.height * factor)
+                upscaled = img.resize(new_size, Image.LANCZOS)
 
             save_path, _ = QFileDialog.getSaveFileName(self, "Save Upscaled Image", "",
                 "PNG (*.png);;JPEG (*.jpg);;WebP (*.webp)")
@@ -2709,6 +3321,60 @@ class MainWindow(QMainWindow):
                 self._set_status(f"Upscaled image saved: {save_path}")
         except Exception as e:
             QMessageBox.critical(self, "Upscale Error", str(e))
+
+    def _add_to_gen_queue(self):
+        """Add current prompt + params as a job to the generation queue."""
+        from core.generation_queue import GenerationJob, GenerationQueue
+        if not hasattr(self, '_gen_queue'):
+            self._gen_queue = GenerationQueue()
+        prompt = self.gen_prompt.toPlainText().strip()
+        if not prompt:
+            QMessageBox.warning(self, "Error", "Enter a prompt first.")
+            return
+        job = GenerationJob(prompt=prompt, params={
+            "negative_prompt": self.gen_negative.toPlainText().strip(),
+            "width": int(self.img_width.value()),
+            "height": int(self.img_height.value()),
+            "steps": int(self.img_steps.value()),
+            "cfg_scale": self.img_cfg.value(),
+            "seed": int(self.img_seed.value()),
+            "sampler": self.img_sampler.currentText(),
+        })
+        self._gen_queue.add_job(job)
+        status_icons = {"pending": "⏸", "running": "▶", "done": "✓", "failed": "✗", "cancelled": "⊘"}
+        self.gen_queue_list.addItem(
+            f"{status_icons.get(job.status.value, '●')} {job.job_id} — {prompt[:40]}")
+        self.queue_progress_label.setText(
+            f"{self._gen_queue.get_pending_count()} job(s) queued")
+
+    def _clear_gen_queue(self):
+        if hasattr(self, '_gen_queue'):
+            self._gen_queue.clear()
+        self.gen_queue_list.clear()
+        self.queue_progress_label.setText("")
+
+    def _toggle_queue_pause(self):
+        if not hasattr(self, '_gen_queue'):
+            return
+        if self._gen_queue.is_paused:
+            self._gen_queue.resume()
+            self.pause_queue_btn.setText("Pause")
+        else:
+            self._gen_queue.pause()
+            self.pause_queue_btn.setText("Resume")
+
+    def _queue_context_menu(self, pos):
+        menu = QMenu(self)
+        cancel_action = menu.addAction("Cancel this job")
+        action = menu.exec(self.gen_queue_list.mapToGlobal(pos))
+        if action == cancel_action and hasattr(self, '_gen_queue'):
+            row = self.gen_queue_list.currentRow()
+            jobs = self._gen_queue.get_jobs()
+            if 0 <= row < len(jobs):
+                self._gen_queue.cancel_job(jobs[row].job_id)
+                item = self.gen_queue_list.item(row)
+                if item:
+                    item.setText(f"⊘ {jobs[row].job_id} — {jobs[row].prompt[:40]}")
 
     def _generate(self):
         """Run image or video generation with current parameters.
@@ -2765,6 +3431,24 @@ class MainWindow(QMainWindow):
         if hasattr(self, 'img2img_enabled') and self.img2img_enabled.isChecked():
             kwargs["init_image"] = self.img2img_input.path()
             kwargs["strength"] = self.img2img_strength.value()
+
+        # ControlNet params
+        if hasattr(self, 'controlnet_enabled') and self.controlnet_enabled.isChecked():
+            kwargs["controlnet_enabled"] = True
+            kwargs["controlnet_model_id"] = self.controlnet_model.currentText()
+            kwargs["controlnet_preprocessor"] = self.controlnet_preprocessor.currentText()
+            kwargs["controlnet_input_image"] = self.controlnet_input.path()
+            kwargs["controlnet_strength"] = self.controlnet_strength.value()
+            if hasattr(self, 'controlnet_guidance_start'):
+                kwargs["controlnet_guidance_start"] = self.controlnet_guidance_start.value()
+            if hasattr(self, 'controlnet_guidance_end'):
+                kwargs["controlnet_guidance_end"] = self.controlnet_guidance_end.value()
+
+        # IP-Adapter params
+        if hasattr(self, 'ip_adapter_enabled') and self.ip_adapter_enabled.isChecked():
+            kwargs["ip_adapter_enabled"] = True
+            kwargs["ip_adapter_image"] = self.ip_adapter_image.path()
+            kwargs["ip_adapter_scale"] = self.ip_adapter_scale.value()
 
         # Gather multi-LoRA data
         loras = []

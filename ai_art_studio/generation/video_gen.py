@@ -10,19 +10,15 @@ from pathlib import Path
 from typing import Optional, List, Dict, Any, Callable
 from datetime import datetime
 
-import torch
-import numpy as np
-
 from core.logger import get_logger
 logger = get_logger(__name__)
-
-from generation.utils import _load_with_offline_fallback  # noqa: E402
 
 
 class VideoGenerator:
     """Video generation with full parameter control and VRAM management."""
 
     def __init__(self, hardware_config=None):
+        import torch
         from core.config import ConfigManager
         cfg = ConfigManager()
         self.hardware = hardware_config or cfg.config.hardware
@@ -73,6 +69,7 @@ class VideoGenerator:
 
     def _load_wan21(self, model_path: str):
         """Load WAN 2.1 video generation model."""
+        import torch
         try:
             from diffusers import WanPipeline
 
@@ -89,6 +86,7 @@ class VideoGenerator:
 
     def _load_animatediff(self, model_path: str):
         """Load AnimateDiff pipeline (SD 1.5 based video)."""
+        import torch
         from diffusers import AnimateDiffPipeline, MotionAdapter, DDIMScheduler
 
         adapter = MotionAdapter.from_pretrained(
@@ -143,6 +141,7 @@ class VideoGenerator:
                  seed: int = -1, flow_shift: float = 3.0,
                  callback: Callable = None) -> List[Any]:
         """Generate a video clip."""
+        import torch
         if self.pipe is None:
             raise RuntimeError("No video model loaded")
 
