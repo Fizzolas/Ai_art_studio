@@ -440,6 +440,7 @@ class MainWindow(QMainWindow):
         self._prompt_queue_index = 0
         self._review_items = []
         self._review_index = 0
+        self._last_video_path = ""
 
         self.setWindowTitle("AI Art Studio")
         self.setMinimumSize(900, 600)
