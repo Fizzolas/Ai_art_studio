@@ -440,6 +440,7 @@ class MainWindow(QMainWindow):
         self._prompt_queue_index = 0
         self._review_items = []
         self._review_index = 0
+        self._last_video_path = ""
 
         self.setWindowTitle("AI Art Studio")
         self.setMinimumSize(900, 600)
@@ -1252,16 +1253,6 @@ class MainWindow(QMainWindow):
         prompt_section.addWidget(self.gen_negative)
         left_layout.addWidget(prompt_section)
 
-        # Image-to-Image
-        img2img_section = CollapsibleSection("Image-to-Image", start_collapsed=True)
-        self.img2img_enabled = LabeledCheck("Enable img2img mode", False)
-        self.img2img_input = PathSelector("Input Image", mode="file")
-        self.img2img_strength = LabeledSlider("Denoising Strength", 0.0, 1.0, 0.75, 0.01, 2)
-        img2img_section.addWidget(self.img2img_enabled)
-        img2img_section.addWidget(self.img2img_input)
-        img2img_section.addWidget(self.img2img_strength)
-        left_layout.addWidget(img2img_section)
-
         # Image parameters
         self.img_params_section = CollapsibleSection("Image Parameters")
         self.img_width = LabeledSlider("Width", 256, 2048, 768, 64)
@@ -1306,6 +1297,51 @@ class MainWindow(QMainWindow):
             tooltip="Generate multiple images at once. Uses more VRAM.")
         self.img_params_section.addWidget(self.img_batch)
         left_layout.addWidget(self.img_params_section)
+
+        # Advanced Image Settings (Part B)
+        adv_section = CollapsibleSection("Advanced Image Settings", start_collapsed=True)
+        self.img_eta = LabeledSlider("DDIM Eta", 0.0, 1.0,
+            self.cfg.config.generation.img_eta, 0.01, 2)
+        self.img_tiling = LabeledCheck("Seamless Tiling",
+            default=self.cfg.config.generation.img_tiling)
+        self.img_karras = LabeledCheck("Karras Sigmas",
+            default=self.cfg.config.generation.img_karras_sigmas)
+        self.img_rescale_cfg = LabeledSlider("CFG Rescale", 0.0, 1.0,
+            self.cfg.config.generation.img_rescale_cfg, 0.01, 2)
+        self.img_aes_score = LabeledSlider("Aesthetic Score (SDXL)", 1.0, 10.0,
+            self.cfg.config.generation.img_aesthetic_score, 0.5, 1)
+        self.img_neg_aes = LabeledSlider("Negative Aesthetic Score", 1.0, 10.0,
+            self.cfg.config.generation.img_negative_aesthetic_score, 0.5, 1)
+        self.img_denoise_start = LabeledSlider("Denoise Start", 0.0, 1.0,
+            self.cfg.config.generation.img_denoising_start, 0.01, 2)
+        self.img_denoise_end = LabeledSlider("Denoise End", 0.0, 1.0,
+            self.cfg.config.generation.img_denoising_end, 0.01, 2)
+        adv_section.addWidget(self.img_eta)
+        adv_section.addWidget(self.img_tiling)
+        adv_section.addWidget(self.img_karras)
+        adv_section.addWidget(self.img_rescale_cfg)
+        adv_section.addWidget(self.img_aes_score)
+        adv_section.addWidget(self.img_neg_aes)
+        adv_section.addWidget(self.img_denoise_start)
+        adv_section.addWidget(self.img_denoise_end)
+        # Auto-save advanced image settings
+        self.img_eta.valueChanged.connect(
+            lambda v: self.cfg.update_and_save("generation", "img_eta", v))
+        self.img_tiling.toggled.connect(
+            lambda v: self.cfg.update_and_save("generation", "img_tiling", v))
+        self.img_karras.toggled.connect(
+            lambda v: self.cfg.update_and_save("generation", "img_karras_sigmas", v))
+        self.img_rescale_cfg.valueChanged.connect(
+            lambda v: self.cfg.update_and_save("generation", "img_rescale_cfg", v))
+        self.img_aes_score.valueChanged.connect(
+            lambda v: self.cfg.update_and_save("generation", "img_aesthetic_score", v))
+        self.img_neg_aes.valueChanged.connect(
+            lambda v: self.cfg.update_and_save("generation", "img_negative_aesthetic_score", v))
+        self.img_denoise_start.valueChanged.connect(
+            lambda v: self.cfg.update_and_save("generation", "img_denoising_start", v))
+        self.img_denoise_end.valueChanged.connect(
+            lambda v: self.cfg.update_and_save("generation", "img_denoising_end", v))
+        left_layout.addWidget(adv_section)
 
         # Hi-res fix
         hires_section = CollapsibleSection("Hi-Res Fix", start_collapsed=True)
@@ -1456,6 +1492,96 @@ class MainWindow(QMainWindow):
         self.vid_params_section.addWidget(self.vid_cfg)
         self.vid_seed = LabeledSlider("Seed (-1 = random)", -1, 999999999, -1, 1)
         self.vid_params_section.addWidget(self.vid_seed)
+
+        # Video resolution presets
+        vid_res_presets = [
+            ("480p", 854, 480), ("480p\u2191", 480, 854),
+            ("720p", 1280, 720), ("720p\u2191", 720, 1280),
+            ("512\u00b2", 512, 512), ("480\u00b2", 480, 480),
+        ]
+        vid_res_row = QHBoxLayout()
+        for label, w, h in vid_res_presets:
+            btn = QPushButton(label)
+            btn.setMaximumWidth(68)
+            btn.setStyleSheet("font-size: 11px; padding: 4px 5px;")
+            btn.clicked.connect(lambda _, w=w, h=h: (
+                self.vid_width.setValue(w), self.vid_height.setValue(h)))
+            vid_res_row.addWidget(btn)
+        vid_res_widget = QWidget()
+        vid_res_widget.setLayout(vid_res_row)
+        self.vid_params_section.addWidget(vid_res_widget)
+
+        # Video negative prompt
+        self.vid_negative = QPlainTextEdit()
+        self.vid_negative.setPlaceholderText("Negative prompt for video...")
+        self.vid_negative.setMaximumHeight(60)
+        self.vid_params_section.addWidget(self.vid_negative)
+
+        # Video output format
+        self.vid_format_combo = LabeledCombo("Output Format", ["mp4", "gif", "webm"], "mp4")
+        self.vid_format_combo.currentTextChanged.connect(
+            lambda v: self.cfg.update_and_save("generation", "vid_format", v))
+        self.vid_params_section.addWidget(self.vid_format_combo)
+
+        # Advanced Video Settings
+        adv_vid_section = CollapsibleSection("Advanced Video Settings", start_collapsed=True)
+        self.vid_flow_shift = LabeledSlider("Flow Shift (WAN)", 0.0, 10.0, 3.0, 0.1, 1)
+        self.vid_flow_shift.valueChanged.connect(
+            lambda v: self.cfg.update_and_save("generation", "vid_flow_shift", v))
+        adv_vid_section.addWidget(self.vid_flow_shift)
+        self.vid_decode_chunks = LabeledSlider("Decode Chunk Size", 1, 32, 8, 1, 0)
+        self.vid_decode_chunks.valueChanged.connect(
+            lambda v: self.cfg.update_and_save("generation", "vid_decode_chunk_size", int(v)))
+        adv_vid_section.addWidget(self.vid_decode_chunks)
+        self.vid_overlap = LabeledSlider("Clip Overlap Frames", 0, 16, 4, 1, 0)
+        self.vid_overlap.valueChanged.connect(
+            lambda v: self.cfg.update_and_save("generation", "vid_overlap_frames", int(v)))
+        adv_vid_section.addWidget(self.vid_overlap)
+        self.vid_clip_count = LabeledSlider("Clip Count (stitching)", 1, 8, 1, 1, 0)
+        self.vid_clip_count.valueChanged.connect(
+            lambda v: self.cfg.update_and_save("generation", "vid_clip_count", int(v)))
+        adv_vid_section.addWidget(self.vid_clip_count)
+        self.vid_tiling_check = LabeledCheck("Spatial Tiling", False)
+        self.vid_tiling_check.toggled.connect(
+            lambda v: self.cfg.update_and_save("generation", "vid_tiling", v))
+        adv_vid_section.addWidget(self.vid_tiling_check)
+        self.vid_sample_method = LabeledCombo(
+            "Sampling Method", ["euler", "euler_a", "dpm++_2m", "ddim"], "euler")
+        self.vid_sample_method.currentTextChanged.connect(
+            lambda v: self.cfg.update_and_save("generation", "vid_sample_method", v))
+        adv_vid_section.addWidget(self.vid_sample_method)
+
+        stitch_info = QLabel(
+            "Clip Count > 1: generates multiple clips sequentially,\n"
+            "each seeded from the last frame of the previous clip,\n"
+            "then stitches them into one long video."
+        )
+        stitch_info.setObjectName("muted")
+        stitch_info.setWordWrap(True)
+        adv_vid_section.addWidget(stitch_info)
+
+        # Clip context captioning
+        self.vid_caption_clips = LabeledCheck(
+            "Caption clips for context continuity", True)
+        self.vid_caption_clips.toggled.connect(
+            lambda v: self.cfg.update_and_save("generation", "vid_caption_clips", v))
+        adv_vid_section.addWidget(self.vid_caption_clips)
+        self.vid_caption_frames = LabeledSlider(
+            "Frames sampled per clip caption", 3, 10, 5, 1, 0)
+        self.vid_caption_frames.valueChanged.connect(
+            lambda v: self.cfg.update_and_save("generation", "vid_caption_sample_frames", int(v)))
+        adv_vid_section.addWidget(self.vid_caption_frames)
+        caption_note = QLabel(
+            "When enabled, each generated clip is captioned (frames \u2192 sequence \u2192 summary)\n"
+            "and the description is fed into the next clip's prompt as continuation context.\n"
+            "Requires a captioning model (BLIP-2, Florence-2, or WD Tagger) to be installed."
+        )
+        caption_note.setObjectName("muted")
+        caption_note.setWordWrap(True)
+        adv_vid_section.addWidget(caption_note)
+
+        self.vid_params_section.addWidget(adv_vid_section)
+
         self.vid_params_section.setVisible(False)
         left_layout.addWidget(self.vid_params_section)
 
@@ -1494,6 +1620,46 @@ class MainWindow(QMainWindow):
         run_queue_btn.clicked.connect(self._run_prompt_queue)
         pq_section.addWidget(run_queue_btn)
         left_layout.addWidget(pq_section)
+
+        # ── Audio Generation (Experimental) ──
+        audio_section = CollapsibleSection("Audio Generation (Experimental)", start_collapsed=True)
+        self.audio_status_label = QLabel("No audio model loaded")
+        self.audio_status_label.setObjectName("muted")
+        audio_section.addWidget(self.audio_status_label)
+        self.audio_model_combo = LabeledCombo("Audio Model", [
+            "facebook/musicgen-small",
+            "facebook/musicgen-medium",
+            "CVSSP/audioldm2",
+            "CVSSP/audioldm2-music",
+            "stabilityai/stable-audio-open-1.0",
+        ], "facebook/musicgen-small")
+        audio_section.addWidget(self.audio_model_combo)
+        load_audio_btn = QPushButton("Load Audio Model")
+        load_audio_btn.clicked.connect(self._load_audio_model)
+        audio_section.addWidget(load_audio_btn)
+        self.audio_prompt = QPlainTextEdit()
+        self.audio_prompt.setPlaceholderText("Describe the audio/music to generate...")
+        self.audio_prompt.setMaximumHeight(70)
+        audio_section.addWidget(self.audio_prompt)
+        self.audio_duration = LabeledSlider("Duration (seconds)", 1.0, 60.0, 10.0, 0.5, 1)
+        self.audio_cfg = LabeledSlider("Guidance Scale", 1.0, 10.0, 3.5, 0.5, 1)
+        audio_section.addWidget(self.audio_duration)
+        audio_section.addWidget(self.audio_cfg)
+        self.audio_sync_check = LabeledCheck("Sync to generated video", False)
+        audio_section.addWidget(self.audio_sync_check)
+        self.audio_format = LabeledCombo("Output Format", ["wav", "mp3", "flac"], "wav")
+        audio_section.addWidget(self.audio_format)
+        gen_audio_btn = QPushButton("Generate Audio")
+        gen_audio_btn.clicked.connect(self._generate_audio)
+        audio_section.addWidget(gen_audio_btn)
+        scaffold_note = QLabel(
+            "Audio generation is a work-in-progress feature.\n"
+            "MusicGen and AudioLDM2 backends are supported when transformers/diffusers are installed."
+        )
+        scaffold_note.setObjectName("muted")
+        scaffold_note.setWordWrap(True)
+        audio_section.addWidget(scaffold_note)
+        left_layout.addWidget(audio_section)
 
         # Generate button (always visible at bottom)
         left_layout.addStretch()
@@ -3428,6 +3594,24 @@ class MainWindow(QMainWindow):
             "hires_denoising": self.hires_denoise.value(),
         }
 
+        # Advanced image params
+        if hasattr(self, 'img_eta'):
+            kwargs["eta"] = self.img_eta.value()
+        if hasattr(self, 'img_tiling') and self.img_tiling.isChecked():
+            kwargs["tiling"] = True
+        if hasattr(self, 'img_karras') and self.img_karras.isChecked():
+            kwargs["karras_sigmas"] = True
+        if hasattr(self, 'img_rescale_cfg') and self.img_rescale_cfg.value() > 0:
+            kwargs["guidance_rescale"] = self.img_rescale_cfg.value()
+        if hasattr(self, 'img_aes_score'):
+            kwargs["aesthetic_score"] = self.img_aes_score.value()
+        if hasattr(self, 'img_neg_aes'):
+            kwargs["negative_aesthetic_score"] = self.img_neg_aes.value()
+        if hasattr(self, 'img_denoise_start') and self.img_denoise_start.value() > 0:
+            kwargs["denoising_start"] = self.img_denoise_start.value()
+        if hasattr(self, 'img_denoise_end') and self.img_denoise_end.value() < 1.0:
+            kwargs["denoising_end"] = self.img_denoise_end.value()
+
         if hasattr(self, 'img2img_enabled') and self.img2img_enabled.isChecked():
             kwargs["init_image"] = self.img2img_input.path()
             kwargs["strength"] = self.img2img_strength.value()
@@ -3473,13 +3657,20 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Error", "Load a video model first.")
             return
 
+        # Route to long-video generation if clip_count > 1
+        clip_count = int(self.vid_clip_count.value()) if hasattr(self, 'vid_clip_count') else 1
+        if clip_count > 1:
+            self._generate_long_video(prompt)
+            return
+
         self.generate_btn.setEnabled(False)
         self.gen_progress.setVisible(True)
         self._set_vram_poll_rate(True)
 
+        neg = self.vid_negative.toPlainText().strip() if hasattr(self, 'vid_negative') else ""
         kwargs = {
             "prompt": prompt,
-            "negative_prompt": self.gen_negative.toPlainText().strip(),
+            "negative_prompt": neg or self.gen_negative.toPlainText().strip(),
             "width": int(self.vid_width.value()),
             "height": int(self.vid_height.value()),
             "num_frames": int(self.vid_frames.value()),
@@ -3498,6 +3689,132 @@ class MainWindow(QMainWindow):
         worker.error.connect(self._on_gen_error)
         self._track_worker(worker)
         worker.start()
+
+    def _generate_long_video(self, prompt):
+        """Generate a long video by stitching multiple clips together."""
+        self.generate_btn.setEnabled(False)
+        self.gen_progress.setVisible(True)
+        self.gen_progress.setRange(0, 0)
+        self._set_vram_poll_rate(True)
+        self.gen_info.setText("Generating long video (multi-clip stitching)...")
+
+        neg = self.vid_negative.toPlainText().strip() if hasattr(self, 'vid_negative') else ""
+        kwargs = {
+            "prompt": prompt,
+            "negative_prompt": neg or self.gen_negative.toPlainText().strip(),
+            "width": int(self.vid_width.value()),
+            "height": int(self.vid_height.value()),
+            "frames_per_clip": int(self.vid_frames.value()),
+            "clip_count": int(self.vid_clip_count.value()),
+            "overlap_frames": int(self.vid_overlap.value()) if hasattr(self, 'vid_overlap') else 4,
+            "fps": int(self.vid_fps.value()),
+            "steps": int(self.vid_steps.value()),
+            "cfg_scale": self.vid_cfg.value(),
+            "seed": int(self.vid_seed.value()),
+            "flow_shift": self.vid_flow_shift.value() if hasattr(self, 'vid_flow_shift') else 3.0,
+            "output_dir": self.cfg.config.generation.output_dir,
+            "caption_clips": self.vid_caption_clips.isChecked() if hasattr(self, 'vid_caption_clips') else True,
+            "caption_sample_frames": int(self.vid_caption_frames.value()) if hasattr(self, 'vid_caption_frames') else 5,
+        }
+
+        class LongVideoWorker(QThread):
+            finished = pyqtSignal(str)
+            error = pyqtSignal(str)
+            progress = pyqtSignal(int, int, str)
+
+            def __init__(self, generator, **kw):
+                super().__init__()
+                self.generator = generator
+                self.kw = kw
+
+            def run(self):
+                try:
+                    self.kw["callback"] = lambda done, total, msg: self.progress.emit(done, total, msg)
+                    path = self.generator.generate_long_video(**self.kw)
+                    self.finished.emit(path)
+                except Exception as e:
+                    import traceback
+                    from core.logger import get_logger
+                    get_logger("worker").error(f"LongVideoWorker failed: {e}\n{traceback.format_exc()}")
+                    self.error.emit(str(e))
+                finally:
+                    from core.gpu_utils import flush_gpu_memory
+                    flush_gpu_memory()
+
+        worker = LongVideoWorker(self.video_generator, **kwargs)
+        worker.progress.connect(lambda done, total, msg: (
+            self.gen_progress.setRange(0, max(total, 1)),
+            self.gen_progress.setValue(done),
+            self.gen_info.setText(msg),
+        ))
+        worker.finished.connect(self._on_long_video_complete)
+        worker.error.connect(self._on_gen_error)
+        self._track_worker(worker)
+        worker.start()
+
+    def _on_long_video_complete(self, filepath):
+        self.generate_btn.setEnabled(True)
+        self.gen_progress.setVisible(False)
+        self._set_vram_poll_rate(False)
+        self._last_video_path = filepath
+        self.gen_info.setText(f"Long video saved: {filepath}")
+        self.gen_output_image.setText(f"Long video saved to:\n{filepath}")
+        self._notify("Long video generation complete!", "success")
+
+    # ── Audio Generation ──────────────────────────────────────────────────
+
+    def _load_audio_model(self):
+        model_id = self.audio_model_combo.currentText()
+        self.audio_status_label.setText(f"Loading {model_id}...")
+        try:
+            from generation.audio_gen import AudioGenerator
+        except ImportError:
+            self.audio_status_label.setText("audio_gen module not found")
+            return
+        if not hasattr(self, 'audio_generator'):
+            self.audio_generator = AudioGenerator()
+        try:
+            self.audio_generator.load_model(
+                model_id, on_progress=lambda m: self.audio_status_label.setText(m))
+            self.audio_status_label.setText(f"Loaded: {model_id}")
+            self._notify(f"Audio model loaded: {model_id}", "success")
+        except Exception as e:
+            self.audio_status_label.setText(f"Failed: {e}")
+            self._notify(f"Audio model load failed: {e}", "error")
+
+    def _generate_audio(self):
+        if not hasattr(self, 'audio_generator') or self.audio_generator.pipe is None:
+            self._notify("Load an audio model first", "warning")
+            return
+        prompt = self.audio_prompt.toPlainText().strip()
+        if not prompt:
+            self._notify("Enter an audio prompt first", "warning")
+            return
+        duration = self.audio_duration.value()
+        guidance = self.audio_cfg.value()
+        fmt = self.audio_format.currentText()
+        output_dir = self.cfg.config.generation.output_dir
+        self._set_status("Generating audio...", 0)
+        try:
+            audio, sr = self.audio_generator.generate(
+                prompt, duration_seconds=duration, guidance_scale=guidance)
+            path = self.audio_generator.save_audio(audio, sr, output_dir, format=fmt)
+            self._set_status(f"Audio saved: {path}", -1)
+            self._notify("Audio generation complete!", "success")
+
+            # If sync to video is checked and we have a last video path, embed
+            if (self.audio_sync_check.isChecked()
+                    and hasattr(self, '_last_video_path')
+                    and self._last_video_path):
+                base, ext = os.path.splitext(self._last_video_path)
+                out_path = f"{base}_with_audio.mp4"
+                self.audio_generator.embed_audio_in_video(
+                    audio, sr, self._last_video_path, out_path)
+                self._notify(f"Audio embedded in video: {os.path.basename(out_path)}", "success")
+        except Exception as e:
+            self._set_status("Audio generation failed", -1)
+            self._notify(f"Audio failed: {e}", "error")
+            logger.error(f"Audio generation error: {e}", exc_info=True)
 
     def _on_gen_complete(self, images):
         """Handle completed image generation results.
@@ -3588,6 +3905,7 @@ class MainWindow(QMainWindow):
     def _on_video_gen_complete(self, results):
         self.generate_btn.setEnabled(True)
         self.gen_progress.setVisible(False)
+        self._set_vram_poll_rate(False)
 
         if results and results[0]:
             frames = results[0]
@@ -3595,6 +3913,7 @@ class MainWindow(QMainWindow):
                 frames, self.cfg.config.generation.output_dir,
                 fps=int(self.vid_fps.value()),
             )
+            self._last_video_path = filepath
             self.gen_info.setText(f"Video saved: {filepath}")
 
             # Show first frame as preview

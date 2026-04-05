@@ -278,7 +278,17 @@ class ImageGenerator:
                  controlnet_guidance_end: float = 1.0,
                  ip_adapter_enabled: bool = False,
                  ip_adapter_image: str = "",
-                 ip_adapter_scale: float = 0.6) -> List[Image.Image]:
+                 ip_adapter_scale: float = 0.6,
+                 # Advanced image params (v0.6.0)
+                 eta: float = 0.0,
+                 tiling: bool = False,
+                 karras_sigmas: bool = False,
+                 guidance_rescale: float = 0.0,
+                 aesthetic_score: float = 6.0,
+                 negative_aesthetic_score: float = 2.5,
+                 denoising_start: float = 0.0,
+                 denoising_end: float = 1.0,
+                 ) -> List[Image.Image]:
         """Generate images with full parameter control."""
         if self.pipe is None:
             raise RuntimeError("No model loaded")
@@ -330,6 +340,22 @@ class ImageGenerator:
             # Clip skip for SD models
             if self.model_type in ("sd15", "sdxl") and clip_skip > 1:
                 gen_kwargs["clip_skip"] = clip_skip
+
+            # Advanced image params — only pass when non-default to avoid
+            # breaking pipelines that don't support these kwargs
+            if eta > 0:
+                gen_kwargs["eta"] = eta
+            if guidance_rescale > 0:
+                gen_kwargs["guidance_rescale"] = guidance_rescale
+            if self.model_type == "sdxl":
+                if aesthetic_score != 6.0:
+                    gen_kwargs["aesthetic_score"] = aesthetic_score
+                if negative_aesthetic_score != 2.5:
+                    gen_kwargs["negative_aesthetic_score"] = negative_aesthetic_score
+            if denoising_start > 0:
+                gen_kwargs["denoising_start"] = denoising_start
+            if denoising_end < 1.0:
+                gen_kwargs["denoising_end"] = denoising_end
 
             # Progress callback
             if callback:
