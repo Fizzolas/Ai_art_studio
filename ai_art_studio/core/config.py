@@ -122,6 +122,11 @@ class TrainingConfig:
     caption_extension: str = ".txt"
     num_repeats: int = 10
 
+    # Checkpoint / sampling
+    resume_from_checkpoint: bool = False
+    sample_during_training: bool = False
+    sample_every_n_steps: int = 500
+
     # Output
     output_dir: str = str(MODELS_DIR)
     output_name: str = "my_lora"
@@ -130,6 +135,9 @@ class TrainingConfig:
 
 @dataclass
 class GenerationConfig:
+    # Dataset processing
+    max_resolution: int = 1024
+
     # Image generation
     img_width: int = 768
     img_height: int = 768
