@@ -439,11 +439,16 @@ class DatasetManager:
             fps = 30
 
         video_frames_dir = out_dir / "video_frames"
+        from core.config import ConfigManager as _CM
+        _cap_cfg = _CM().config.captioning
+        _every_n = max(1, _cap_cfg.video_frame_interval)
+        _max_frames = max(1, _cap_cfg.video_max_frames)
+
         saved = extract_frames(
             video_path=str(src),
             out_dir=str(video_frames_dir),
-            every_n_frames=max(1, int(fps)),   # ~1fps
-            max_frames=60,
+            every_n_frames=_every_n,
+            max_frames=_max_frames,
             max_resolution=max_res,
         )
 

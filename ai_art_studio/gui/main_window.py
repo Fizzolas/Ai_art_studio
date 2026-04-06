@@ -4251,6 +4251,56 @@ class MainWindow(QMainWindow):
         self.caption_format.currentTextChanged.connect(
             lambda v: self.cfg.update_and_save("captioning", "caption_format", v))
 
+        # Dataset tab
+        self.max_resolution.valueChanged.connect(
+            lambda v: self.cfg.update_and_save("generation", "max_resolution", int(v)))
+        self.caption_threshold.valueChanged.connect(
+            lambda v: self.cfg.update_and_save("captioning", "wd_threshold", float(v)))
+        self.overwrite_captions.toggled.connect(
+            lambda v: self.cfg.update_and_save("captioning", "overwrite_existing", v))
+
+        # Training tab — checkpoint / sampling
+        self.resume_check.toggled.connect(
+            lambda v: self.cfg.update_and_save("training", "resume_from_checkpoint", v))
+        self.sample_enabled.toggled.connect(
+            lambda v: self.cfg.update_and_save("training", "sample_during_training", v))
+        self.sample_every_n.valueChanged.connect(
+            lambda v: self.cfg.update_and_save("training", "sample_every_n_steps", int(v)))
+
+        # Image generation — core params
+        self.img_seed.valueChanged.connect(
+            lambda v: self.cfg.update_and_save("generation", "img_seed", int(v)))
+        self.img_sampler.currentTextChanged.connect(
+            lambda v: self.cfg.update_and_save("generation", "img_sampler", v))
+        self.img_clip_skip.valueChanged.connect(
+            lambda v: self.cfg.update_and_save("generation", "img_clip_skip", int(v)))
+        self.img_batch.valueChanged.connect(
+            lambda v: self.cfg.update_and_save("generation", "img_batch_size", int(v)))
+        self.hires_check.toggled.connect(
+            lambda v: self.cfg.update_and_save("generation", "img_hires_fix", v))
+        self.hires_scale.valueChanged.connect(
+            lambda v: self.cfg.update_and_save("generation", "img_hires_scale", float(v)))
+        self.hires_steps.valueChanged.connect(
+            lambda v: self.cfg.update_and_save("generation", "img_hires_steps", int(v)))
+        self.hires_denoise.valueChanged.connect(
+            lambda v: self.cfg.update_and_save("generation", "img_hires_denoising", float(v)))
+
+        # Video generation — core params
+        self.vid_width.valueChanged.connect(
+            lambda v: self.cfg.update_and_save("generation", "vid_width", int(v)))
+        self.vid_height.valueChanged.connect(
+            lambda v: self.cfg.update_and_save("generation", "vid_height", int(v)))
+        self.vid_frames.valueChanged.connect(
+            lambda v: self.cfg.update_and_save("generation", "vid_frames", int(v)))
+        self.vid_fps.valueChanged.connect(
+            lambda v: self.cfg.update_and_save("generation", "vid_fps", int(v)))
+        self.vid_steps.valueChanged.connect(
+            lambda v: self.cfg.update_and_save("generation", "vid_steps", int(v)))
+        self.vid_cfg.valueChanged.connect(
+            lambda v: self.cfg.update_and_save("generation", "vid_cfg_scale", float(v)))
+        self.vid_seed.valueChanged.connect(
+            lambda v: self.cfg.update_and_save("generation", "vid_seed", int(v)))
+
         # Pipeline mode
         self.pipeline_mode.currentTextChanged.connect(
             self._on_pipeline_mode_changed)
